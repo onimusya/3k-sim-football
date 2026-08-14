@@ -50,13 +50,59 @@ Every scene imports from `src/art/` and must follow these rules:
 - **Backdrop scenes** (TeamManagement, League, MatchResult) use `stadiumBackdrop()` from `Backdrop.js` and must call `.tick(delta)` in their `update()` loop
 - **Depth bands** are documented at the top of each scene file
 
+## Match simulation layer
+
+`MatchDayScene` runs a per-frame possession model on top of the `MatchEngine`
+result. The engine stays authoritative for the scoreline; the visual layer only
+decides how the ball gets between the scripted events.
+
+- `this.play` holds possession, carrier, phase (`kickoff` / `build` / `pass` /
+  `attack` / `shot` / `setpiece` / `celebrate`), and the `inFlight` flag
+- `assignJobs()` labels every actor each frame: `carry`, `support`, `press`,
+  `keeper`, `hold`
+- `shapeTarget()` slides the whole formation with the ball, scaled per player by
+  `a.adv` (0 = deepest defender, 1 = furthest forward) so the shape stretches
+- `choosePass()` / `doPass()` handle passing, interceptions and recycling
+- Scripted events route through `shootFromActor()`, `forceAttack()`, `restart()`
+  and `kickoff()` so goals, saves, wides and fouls resolve inside the same model
+
+Two traps to remember when touching this:
+
+1. **Never let the loose-ball pickup run while `play.inFlight` is true.** A player
+   standing near the passer will re-collect the ball instantly and it will never
+   travel. This cost a debugging cycle — symptom was the ball staying inside
+   0.345–0.538 with only two players ever touching it.
+2. **Anything anchored to a player must be re-pinned every frame.** Players now
+   cover ground, so one-shot positioning leaves floating name tags stranded on
+   empty grass. See `updateNameTags()`.
+
+Useful sanity numbers for a healthy match (measured over ~10s of play):
+ball fx range roughly 0.05–1.0, 8+ distinct carriers, 10+ possession changes,
+average outfielder covering ~0.33 of the pitch length, and at most a couple of
+momentary sprite overlaps.
+
 ## Known issues and next steps
 
-Per the last critic pass (scores: reference 62, ours 49):
+1. **Match moments still lack impact.** Possession, runs, passing and pressing now
+   read correctly, but there are no impact starbursts on tackles, no dedicated
+   kick or dive poses, and no mini-map. The chibi has only walk frames.
+2. **Environment richness.** The terraces and town skyline are there, but there
+   are no kiosks, parked cars or animated flag poles — the detail that makes
+   Kairosoft's world feel inhabited at rest.
+3. **Personality.** The Three Kingdoms theme mostly lives in names, traits and
+   warrior silhouettes. The menu and management screens would benefit from
+   faction-specific flair (banners, tinted panel accents, mascots).
 
-1. **Match screen shows a formation, not a moment.** Needs: impact starbursts on tackles, varied chibi poses (kick/dive), a mini-map or possession indicator, and the ball carrier should be more prominent than a grey tooltip.
-2. **Environment richness.** The terraces and town skyline are there, but there are no kiosks, no parked cars, no animated flag poles — the kind of detail that makes Kairosoft's world feel inhabited at rest.
-3. **Personality.** The Three Kingdoms theme mostly lives in names and traits. The menu and management screens would benefit from faction-specific visual flair (banners, colour-tinted panel accents, mascot characters).
+## Deployment
+
+Static deploy to Vercel: `vercel --prod` from the project root, config in
+`vercel.json` (no build step, `outputDirectory: "."`).
+
+**`/src/**` must send a revalidating `Cache-Control`.** The filenames are
+unversioned — there is no content hashing — so an `immutable` long-max-age header
+pins returning visitors to whichever copy of the source their browser cached.
+This actually happened: a deploy shipped correct code while the live site kept
+executing the previous build. Only `/.shots/**` is safe to cache hard.
 
 ## Resuming work
 
