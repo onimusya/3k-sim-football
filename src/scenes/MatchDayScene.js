@@ -67,6 +67,11 @@ export class MatchDayScene extends Phaser.Scene {
         this.commentaryText = null;
         this.clockText = null;
         this.scoreText = null;
+        this.play = null;
+        this.focusActor = null;
+        this.focusMarker = null;
+        this.commentaryLockUntil = 0;
+        this.nameTags = [];
 
         // Reset any time scaling left over from a previous visit
         this.tweens.timeScale = 1;
@@ -399,12 +404,25 @@ export class MatchDayScene extends Phaser.Scene {
         this.actors = [];
         this.buildTeamActors(this.homeKingdom, this.homePlayers, this.homeKit, 'home');
         this.buildTeamActors(this.awayKingdom, this.awayPlayers, this.awayKit, 'away');
-        this.actors.forEach(a => this.startWander(a, Math.random() * 900));
+        this.initPlay();
     }
 
     buildTeamActors(kingdom, players, kit, team) {
         const slots = formationPositions(kingdom.formation, team);
         const lineup = this.lineupFor(players);
+
+        // How far forward each slot sits within its own team's shape, 0 (deepest
+        // outfielder) to 1 (furthest forward). Used to let strikers push high
+        // while the back line stays honest.
+        const outfield = slots.filter(s => s.role !== 'GK');
+        const dirSign = this.attackDirFor(team);
+        const advOf = (slot) => {
+            if (slot.role === 'GK' || !outfield.length) return 0;
+            const vals = outfield.map(s => s.fx * dirSign);
+            const lo = Math.min(...vals), hi = Math.max(...vals);
+            if (hi - lo < 1e-6) return 0.5;
+            return (slot.fx * dirSign - lo) / (hi - lo);
+        };
 
         slots.forEach((slot, i) => {
             const player = lineup[i % lineup.length];
@@ -415,17 +433,588 @@ export class MatchDayScene extends Phaser.Scene {
             chibi.setFacing('side', team === 'home');   // home looks right, away looks left
             chibi.setDepth(this.pitch.depthAt(slot.fx, slot.fy));
 
+            const pace = (player.stats && player.stats.pace) || 70;
+
             this.actors.push({
                 chibi,
                 player,
                 team,
                 role: slot.role,
                 kit,
-                baseFx: slot.fx,
-                baseFy: slot.fy,
+                // formation slot — the shape the player returns to
+                homeFx: slot.fx,
+                homeFy: slot.fy,
+                adv: advOf(slot),   // 0 = deepest defender, 1 = furthest forward
+                // live position
                 fx: slot.fx,
                 fy: slot.fy,
+                // steering target, recomputed each frame
+                tx: slot.fx,
+                ty: slot.fy,
+                // field units per second, scaled by the warrior's pace
+                speed: 0.052 + (pace / 99) * 0.062,
+                job: 'hold',        // hold | carry | support | press | keeper
+                moving: false,
+                jitter: Math.random() * Math.PI * 2,
             });
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PLAY STATE
+    //
+    // The MatchEngine result is authoritative for the scoreline, so this layer
+    // never invents goals — it simulates the *ball flow* between the scripted
+    // events so the pitch reads like a game rather than a formation diagram.
+    // ═══════════════════════════════════════════════════════════════
+    initPlay() {
+        this.play = {
+            possession: 'home',
+            carrier: null,
+            phase: 'kickoff',
+            ballLoose: false,
+            inFlight: false,
+            passCooldown: 900,
+            frozen: 0,
+        };
+        this.kickoff('home');
+    }
+
+    /** +1 attacks toward fx=1, -1 attacks toward fx=0. */
+    attackDirFor(team) {
+        return team === 'home' ? 1 : -1;
+    }
+
+    targetGoalFx(team) {
+        return team === 'home' ? 0.985 : 0.015;
+    }
+
+    ownGoalFx(team) {
+        return team === 'home' ? 0.015 : 0.985;
+    }
+
+    teamActors(team, includeGK = true) {
+        return this.actors.filter(a =>
+            a.team === team &&
+            a.chibi && a.chibi.container.active &&
+            (includeGK || a.role !== 'GK'));
+    }
+
+    findActorByName(name, team) {
+        if (!name) return null;
+        const pool = team ? this.teamActors(team, false) : this.actors;
+        return pool.find(a => a.player && a.player.name === name) || null;
+    }
+
+    setPossession(team, carrier = null) {
+        const p = this.play;
+        p.possession = team;
+        p.ballLoose = false;
+        p.inFlight = false;
+        p.carrier = carrier || this.pickBuildUpPlayer(team);
+        p.phase = 'build';
+        p.passCooldown = 500 + Math.random() * 500;
+        if (p.carrier) this.setFocus(p.carrier);
+    }
+
+    /** Whoever is closest to the ball on that team, ignoring the keeper. */
+    pickBuildUpPlayer(team) {
+        const b = this.ballState;
+        let best = null, bestD = Infinity;
+        for (const a of this.teamActors(team, false)) {
+            const dx = a.fx - b.fx, dy = (a.fy - b.fy) * 0.45;
+            const d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = a; }
+        }
+        return best || this.teamActors(team)[0] || null;
+    }
+
+    kickoff(team) {
+        const p = this.play;
+        // Reset both teams into their own halves and drop the ball on the spot.
+        this.actors.forEach(a => {
+            a.fx = a.homeFx;
+            a.fy = a.homeFy;
+            a.job = a.role === 'GK' ? 'keeper' : 'hold';
+            this.placeActor(a);
+        });
+        this.ballState.fx = 0.5;
+        this.ballState.fy = 0.5;
+        this.ballState.air = 0;
+        this.placeBall();
+
+        p.phase = 'kickoff';
+        p.possession = team;
+        p.ballLoose = false;
+        p.inFlight = false;
+        p.frozen = 420;                       // brief settle before the tap-off
+        p.carrier = this.pickBuildUpPlayer(team);
+        if (p.carrier) this.setFocus(p.carrier);
+        this.time.delayedCall(460, () => {
+            if (this.matchStarted && this.play.phase === 'kickoff') this.play.phase = 'build';
+        });
+    }
+
+    /** Force a team onto the front foot — used when the engine scripts a chance. */
+    forceAttack(team, carrierActor = null) {
+        const dir = this.attackDirFor(team);
+        const carrier = carrierActor || this.pickBuildUpPlayer(team);
+        if (!carrier) return null;
+        // Move the ball to that player so the run-up reads as continuous play
+        this.ballState.fx = carrier.fx;
+        this.ballState.fy = carrier.fy;
+        this.placeBall();
+        this.setPossession(team, carrier);
+        this.play.phase = 'attack';
+        // Nudge the carrier into the final third so the attack has somewhere to go
+        carrier.fx = Phaser.Math.Clamp(carrier.fx + dir * 0.10, 0.06, 0.94);
+        return carrier;
+    }
+
+    // ── steering targets ──────────────────────────────────────────
+
+    /**
+     * Formation slot translated along the pitch by where the ball is. This is
+     * what stops both teams sitting in their own half all match: the whole shape
+     * slides with play, further for the team in possession.
+     */
+    shapeTarget(a) {
+        const b = this.ballState;
+        const p = this.play;
+        const attacking = p.possession === a.team;
+        const dir = this.attackDirFor(a.team);
+
+        // Everyone tracks the ball's position along the pitch...
+        const ballPull = (b.fx - 0.5) * 0.78;
+        // ...and the attacking side commits a real push upfield, scaled by how
+        // advanced the player is. Strikers get right up the pitch while the back
+        // line stays honest, which is what makes the shape stretch and compress
+        // instead of sliding as one rigid block.
+        const adv = a.adv ?? 0.5;
+        const commit = attacking
+            ? dir * (0.10 + adv * 0.30)
+            : dir * -(0.04 + adv * 0.12);
+
+        let tx = a.homeFx + ballPull + commit;
+        // Defenders hold a line rather than streaming forward with the striker
+        if (a.role !== 'GK') {
+            const ownGoal = this.ownGoalFx(a.team);
+            const maxUp = dir > 0 ? 0.94 : 0.06;
+            tx = dir > 0
+                ? Phaser.Math.Clamp(tx, Math.min(ownGoal + 0.06, 0.2), maxUp)
+                : Phaser.Math.Clamp(tx, maxUp, Math.max(ownGoal - 0.06, 0.8));
+        }
+
+        // Drift laterally toward the ball's channel, keeping formation width
+        const ty = a.homeFy + (b.fy - 0.5) * 0.34;
+
+        return { tx, ty };
+    }
+
+    /** Keeper hugs the goal line and tracks the ball across it. */
+    keeperTarget(a) {
+        const b = this.ballState;
+        const line = this.ownGoalFx(a.team);
+        const dir = this.attackDirFor(a.team);
+        // Comes a little off the line when the ball is near
+        const threat = 1 - Math.min(1, Math.abs(b.fx - line) / 0.35);
+        const tx = line + dir * (0.02 + threat * 0.045);
+        const ty = Phaser.Math.Clamp(0.5 + (b.fy - 0.5) * 0.55, 0.36, 0.64);
+        return { tx, ty };
+    }
+
+    /**
+     * Decide what each player is doing this frame: carry, support the carrier,
+     * press the ball, keep goal, or hold shape.
+     */
+    assignJobs() {
+        const p = this.play;
+        const b = this.ballState;
+
+        for (const a of this.actors) {
+            a.job = a.role === 'GK' ? 'keeper' : 'hold';
+        }
+        if (p.carrier && p.carrier.chibi.container.active) p.carrier.job = 'carry';
+
+        const attackers = this.teamActors(p.possession, false)
+            .filter(a => a !== p.carrier);
+        const defenders = this.teamActors(
+            p.possession === 'home' ? 'away' : 'home', false);
+
+        const distToBall = (a) => {
+            const dx = a.fx - b.fx, dy = (a.fy - b.fy) * 0.45;
+            return dx * dx + dy * dy;
+        };
+
+        // Two nearest attackers make supporting runs ahead of the ball
+        attackers.sort((x, y) => distToBall(x) - distToBall(y));
+        attackers.slice(0, 2).forEach(a => { a.job = 'support'; });
+
+        // Two nearest defenders close the ball down
+        defenders.sort((x, y) => distToBall(x) - distToBall(y));
+        defenders.slice(0, 2).forEach(a => { a.job = 'press'; });
+    }
+
+    /** Per-frame target for one actor based on its current job. */
+    targetFor(a) {
+        const p = this.play;
+        const b = this.ballState;
+        const dir = this.attackDirFor(a.team);
+
+        switch (a.job) {
+            case 'keeper':
+                return this.keeperTarget(a);
+
+            case 'carry': {
+                // Drive at the opponent goal, weaving slightly so it isn't a
+                // straight line, and drifting toward the middle to shoot.
+                const goalFx = this.targetGoalFx(a.team);
+                const weave = Math.sin(this.time.now / 420 + a.jitter) * 0.05;
+                return {
+                    tx: goalFx,
+                    ty: Phaser.Math.Clamp(0.5 + weave + (a.fy - 0.5) * 0.4, 0.12, 0.88),
+                };
+            }
+
+            case 'support': {
+                // Run into space ahead of the ball, offset to one flank
+                const side = a.homeFy < 0.5 ? -1 : 1;
+                return {
+                    tx: Phaser.Math.Clamp(b.fx + dir * 0.13, 0.08, 0.92),
+                    ty: Phaser.Math.Clamp(b.fy + side * 0.16, 0.1, 0.9),
+                };
+            }
+
+            case 'press': {
+                // Go straight at the ball
+                const lead = p.carrier ? dir * -0.015 : 0;
+                return {
+                    tx: Phaser.Math.Clamp(b.fx + lead, 0.03, 0.97),
+                    ty: Phaser.Math.Clamp(b.fy, 0.06, 0.94),
+                };
+            }
+
+            default:
+                return this.shapeTarget(a);
+        }
+    }
+
+    /**
+     * Nudge apart players who end up on the same spot. Without this, converging
+     * runs stack the sprites and it reads as a rendering fault rather than a
+     * challenge for the ball.
+     */
+    separation(a) {
+        let sx = 0, sy = 0;
+        const R = 0.028;
+        for (const o of this.actors) {
+            if (o === a || !o.chibi || !o.chibi.container.active) continue;
+            const dx = a.fx - o.fx;
+            const dy = (a.fy - o.fy) * 0.45;
+            const d = Math.hypot(dx, dy);
+            if (d > 1e-5 && d < R) {
+                const push = (R - d) / R;
+                sx += (dx / d) * push;
+                sy += (dy / d) * push;
+            }
+        }
+        return { sx, sy };
+    }
+
+    /** Move one actor toward its target, driving the walk cycle and facing. */
+    steerActor(a, dt) {
+        const t = this.targetFor(a);
+        // Keep a little personal space, except for whoever is on the ball —
+        // a tackle should look like contact.
+        if (a.job !== 'carry') {
+            const s = this.separation(a);
+            t.tx += s.sx * 0.045;
+            t.ty += s.sy * 0.045;
+        }
+        a.tx = t.tx;
+        a.ty = t.ty;
+
+        let dx = a.tx - a.fx;
+        // fy spans less screen distance than fx, so lateral motion needs a boost
+        // to look like the same running speed.
+        let dy = (a.ty - a.fy) * 1.55;
+
+        const dist = Math.hypot(dx, dy);
+        const sprint = (a.job === 'carry' || a.job === 'press' || a.job === 'support')
+            ? 1.55 : 1;
+        const step = a.speed * sprint * dt;
+
+        if (dist < 0.006 || step <= 0) {
+            if (a.moving) {
+                a.moving = false;
+                a.chibi.setWalking(false);
+                a.chibi.setFacing('side', a.team === 'home');
+            }
+            return;
+        }
+
+        const k = Math.min(1, step / dist);
+        a.fx = Phaser.Math.Clamp(a.fx + dx * k, 0.015, 0.985);
+        a.fy = Phaser.Math.Clamp(a.fy + (a.ty - a.fy) * k, 0.05, 0.95);
+
+        if (!a.moving) { a.moving = true; a.chibi.setWalking(true); }
+        a.chibi.faceVector(dx, a.ty - a.fy);
+        this.placeActor(a);
+    }
+
+    // ── ball flow ─────────────────────────────────────────────────
+
+    /**
+     * Advance possession every frame: keep the ball at the carrier's feet, run
+     * the pass clock, and let defenders win it back.
+     */
+    updatePlay(dt, delta) {
+        const p = this.play;
+        if (!p) return;
+
+        if (p.frozen > 0) {
+            p.frozen -= delta;
+            return;
+        }
+        // Shots and celebrations own the ball; don't fight the tween.
+        if (p.phase === 'shot' || p.phase === 'celebrate' || p.phase === 'setpiece') return;
+
+        const carrier = p.carrier;
+        const carrierLive = carrier && carrier.chibi && carrier.chibi.container.active;
+
+        if (!p.ballLoose && carrierLive) {
+            // Ball sits just in front of the carrier's feet with a dribble bob
+            const dir = this.attackDirFor(carrier.team);
+            const bob = Math.sin(this.time.now / 90) * 0.004;
+            this.ballState.fx = Phaser.Math.Clamp(carrier.fx + dir * 0.022, 0.01, 0.99);
+            this.ballState.fy = Phaser.Math.Clamp(carrier.fy + bob, 0.04, 0.96);
+            this.ballState.air = 0;
+            this.placeBall();
+
+            // Ran out of pitch: recycle rather than standing on the goal line
+            // waiting for a scripted shot that may be minutes away.
+            const dir2 = this.attackDirFor(carrier.team);
+            const deep = dir2 > 0 ? carrier.fx > 0.90 : carrier.fx < 0.10;
+            if (deep) {
+                this.choosePass(true);
+                return;
+            }
+
+            // Pass clock
+            p.passCooldown -= delta;
+            if (p.passCooldown <= 0) {
+                this.choosePass();
+                return;
+            }
+
+            // Pressure: a defender getting on top of the carrier wins the ball
+            const stealer = this.pressureOn(carrier);
+            if (stealer) this.turnover(stealer);
+            return;
+        }
+
+        // Ball is loose — nearest player picks it up. Skipped while a pass or
+        // shot is still travelling, otherwise a player standing near the passer
+        // re-collects it immediately and the ball never actually goes anywhere.
+        if (p.ballLoose && !p.inFlight) {
+            const a = this.nearestActorToBall();
+            if (a) {
+                const dx = a.fx - this.ballState.fx;
+                const dy = (a.fy - this.ballState.fy) * 0.45;
+                if (Math.hypot(dx, dy) < 0.05) this.setPossession(a.team, a);
+            }
+        }
+    }
+
+    /** A defender within tackling range, if any. */
+    pressureOn(carrier) {
+        const other = carrier.team === 'home' ? 'away' : 'home';
+        for (const d of this.teamActors(other, false)) {
+            const dx = d.fx - carrier.fx;
+            const dy = (d.fy - carrier.fy) * 0.45;
+            if (Math.hypot(dx, dy) < 0.022) {
+                // Defence vs the carrier's control decides it
+                const def = (d.player.stats && d.player.stats.defense) || 70;
+                const ctl = (carrier.player.stats && carrier.player.stats.passing) || 70;
+                if (Math.random() < 0.022 + (def - ctl) / 4000) return d;
+            }
+        }
+        return null;
+    }
+
+    turnover(winner) {
+        this.setPossession(winner.team, winner);
+        this.play.phase = 'build';
+        this.typewriterCommentIfIdle(
+            `${winner.player.name} wins the ball back!`);
+    }
+
+    /**
+     * Pick a pass and play it. Forward options are preferred, weighted by the
+     * passer's passing stat, so good passers progress play more often.
+     */
+    choosePass(recycle = false) {
+        const p = this.play;
+        const carrier = p.carrier;
+        if (!carrier) return;
+
+        const dir = this.attackDirFor(carrier.team);
+        const mates = this.teamActors(carrier.team, false).filter(a => a !== carrier);
+        if (!mates.length) return;
+
+        const passSkill = (carrier.player.stats && carrier.player.stats.passing) || 70;
+
+        const scored = mates.map(m => {
+            const forward = (m.fx - carrier.fx) * dir;      // >0 means upfield
+            const dx = m.fx - carrier.fx, dy = (m.fy - carrier.fy) * 0.45;
+            const range = Math.hypot(dx, dy);
+            // Normally favour progressive passes; when recycling out of a dead
+            // end, deliberately look backwards for a teammate in space.
+            let s = (recycle ? -forward * 1.8 : forward * 2.4)
+                  - Math.abs(range - 0.18) * 1.6;
+            s += (Math.random() - 0.5) * 0.55;
+            return { m, s, range, forward };
+        }).sort((a, b) => b.s - a.s);
+
+        const pick = scored[0];
+        if (!pick) return;
+
+        // Long balls go higher and are easier to intercept
+        const long = pick.range > 0.26;
+        this.doPass(pick.m, {
+            duration: 260 + pick.range * 900,
+            air: long ? 34 : 14,
+            intercept: Math.max(0.04, 0.24 - passSkill / 500) + (long ? 0.10 : 0),
+        });
+    }
+
+    doPass(receiver, opts = {}) {
+        const p = this.play;
+        const from = p.carrier;
+        p.ballLoose = true;
+        p.inFlight = true;
+        p.carrier = null;
+        p.phase = 'pass';
+
+        // The receiver breaks toward the ball so the pass reads as intentional
+        receiver.job = 'support';
+        this.setFocus(receiver);
+
+        const tx = Phaser.Math.Clamp(receiver.fx + (Math.random() - 0.5) * 0.02, 0.03, 0.97);
+        const ty = Phaser.Math.Clamp(receiver.fy + (Math.random() - 0.5) * 0.02, 0.06, 0.94);
+
+        this.moveBall(tx, ty, {
+            duration: opts.duration ?? 420,
+            air: opts.air ?? 16,
+            ease: 'Quad.easeOut',
+            onDone: () => {
+                this.play.inFlight = false;
+                if (!this.matchStarted) return;
+                // Interception check — a defender sitting on the landing spot
+                const thief = this.interceptorAt(tx, ty, from ? from.team : receiver.team);
+                if (thief && Math.random() < (opts.intercept ?? 0.12)) {
+                    this.setPossession(thief.team, thief);
+                    this.typewriterCommentIfIdle(`${thief.player.name} reads it and intercepts!`);
+                    return;
+                }
+                if (receiver.chibi && receiver.chibi.container.active) {
+                    this.setPossession(receiver.team, receiver);
+                } else {
+                    this.play.ballLoose = true;
+                }
+            },
+        });
+    }
+
+    /** Opposition player nearest a point, if they're close enough to nick it. */
+    interceptorAt(fx, fy, passingTeam) {
+        const other = passingTeam === 'home' ? 'away' : 'home';
+        let best = null, bestD = Infinity;
+        for (const d of this.teamActors(other, false)) {
+            const dx = d.fx - fx, dy = (d.fy - fy) * 0.45;
+            const dd = Math.hypot(dx, dy);
+            if (dd < 0.05 && dd < bestD) { bestD = dd; best = d; }
+        }
+        return best;
+    }
+
+    /**
+     * Drive a scripted shot from a specific player: bring him onto the ball near
+     * the box, then strike. `outcome` decides what happens after the strike.
+     */
+    shootFromActor(shooter, outcome, onDone) {
+        const p = this.play;
+        const team = shooter ? shooter.team : p.possession;
+        const dir = this.attackDirFor(team);
+        const goalFx = this.targetGoalFx(team);
+
+        if (shooter) {
+            // Place the shooter in a plausible shooting position and give him the ball
+            shooter.fx = Phaser.Math.Clamp(goalFx - dir * (0.10 + Math.random() * 0.07), 0.05, 0.95);
+            shooter.fy = Phaser.Math.Clamp(0.5 + (Math.random() - 0.5) * 0.26, 0.2, 0.8);
+            this.placeActor(shooter);
+            this.ballState.fx = shooter.fx + dir * 0.02;
+            this.ballState.fy = shooter.fy;
+            this.placeBall();
+            this.setFocus(shooter);
+            shooter.chibi.faceVector(dir, 0);
+        }
+
+        p.phase = 'shot';
+        p.possession = team;
+        p.carrier = null;
+        p.ballLoose = false;
+        p.inFlight = true;
+
+        // Strike
+        const targetFy = outcome === 'wide'
+            ? (Math.random() > 0.5 ? 0.16 : 0.84)
+            : 0.5 + Phaser.Math.FloatBetween(-0.045, 0.045);
+        const targetFx = outcome === 'wide'
+            ? Phaser.Math.Clamp(goalFx + dir * 0.045, -0.04, 1.04)
+            : goalFx;
+
+        this.moveBall(targetFx, targetFy, {
+            duration: outcome === 'wide' ? 340 : 300,
+            air: outcome === 'wide' ? 58 : 40,
+            ease: 'Quad.easeIn',
+            onDone: () => {
+                this.play.inFlight = false;
+                if (onDone) onDone();
+            },
+        });
+        return shooter;
+    }
+
+    /** Whistle stop: everyone holds position for a beat. */
+    freezePlay(ms) {
+        this.play.frozen = ms;
+        this.actors.forEach(a => {
+            if (a.chibi && a.chibi.container.active) {
+                a.chibi.setWalking(false);
+                a.moving = false;
+            }
+        });
+    }
+
+    /** Restart with a team in possession after a stoppage. */
+    restart(team, atFx, atFy, delay = 700) {
+        this.play.phase = 'setpiece';
+        this.play.inFlight = false;
+        this.ballState.fx = Phaser.Math.Clamp(atFx, 0.03, 0.97);
+        this.ballState.fy = Phaser.Math.Clamp(atFy, 0.06, 0.94);
+        this.ballState.air = 0;
+        this.placeBall();
+
+        this.time.delayedCall(delay, () => {
+            if (!this.matchStarted) return;
+            const taker = this.pickBuildUpPlayer(team);
+            if (taker) {
+                taker.fx = this.ballState.fx - this.attackDirFor(team) * 0.02;
+                taker.fy = this.ballState.fy;
+                this.placeActor(taker);
+            }
+            this.setPossession(team, taker);
         });
     }
 
@@ -440,36 +1029,6 @@ export class MatchDayScene extends Phaser.Scene {
             this.focusMarker.setPosition(p.x, p.y + 1);
             this.focusMarker.setDepth(depth - 1);
         }
-    }
-
-    /** Small idle wander around the formation slot, re-projected every frame. */
-    startWander(a, delay = 0) {
-        if (!this.matchStarted || !a.chibi || !a.chibi.container.active) return;
-
-        const range = a.role === 'GK' ? 0.012 : 0.026;
-        const targetFx = Phaser.Math.Clamp(
-            a.baseFx + Phaser.Math.FloatBetween(-range, range), 0.02, 0.98);
-        const targetFy = Phaser.Math.Clamp(
-            a.baseFy + Phaser.Math.FloatBetween(-range * 1.3, range * 1.3), 0.05, 0.95);
-
-        a.chibi.setWalking(true);
-        a.chibi.faceVector(targetFx - a.fx, targetFy - a.fy);
-
-        a.tween = this.tweens.add({
-            targets: a,
-            fx: targetFx,
-            fy: targetFy,
-            duration: 850 + Math.random() * 900,
-            delay,
-            ease: 'Sine.easeInOut',
-            onUpdate: () => this.placeActor(a),
-            onComplete: () => {
-                if (!a.chibi || !a.chibi.container.active) return;
-                a.chibi.setWalking(false);
-                a.chibi.setFacing('side', a.team === 'home');
-                this.time.delayedCall(200 + Math.random() * 800, () => this.startWander(a));
-            },
-        });
     }
 
     // ── BALL ──────────────────────────────────────────────────────
@@ -510,14 +1069,7 @@ export class MatchDayScene extends Phaser.Scene {
         this.ball.setStrokeStyle(2, C.panelEdge, 1);
 
         this.placeBall();
-        this.highlightNearestToBall();
-
-        // Idle knock-about between actors
-        this.ballLoop = this.time.addEvent({
-            delay: 1500,
-            loop: true,
-            callback: () => this.passBallToRandomActor(),
-        });
+        // Possession is driven per-frame from update() — no random ball loop.
     }
 
     placeBall() {
@@ -557,7 +1109,6 @@ export class MatchDayScene extends Phaser.Scene {
             onComplete: () => {
                 b.air = 0;
                 this.placeBall();
-                this.highlightNearestToBall();
                 if (opts.onDone) opts.onDone();
             },
         });
@@ -579,13 +1130,12 @@ export class MatchDayScene extends Phaser.Scene {
     }
 
     /**
-     * Put a kit-accent ellipse under the feet of whoever is nearest the ball,
-     * clearing it from the previous holder. Gives the eye a place to land.
+     * Put a kit-accent ellipse under the feet of the player on the ball, so the
+     * eye always has somewhere to land among 22 sprites.
      */
-    highlightNearestToBall() {
-        if (!this.matchStarted || !this.actors || !this.actors.length) return;
-        const a = this.nearestActorToBall();
-        if (!a || a === this.focusActor) return;
+    setFocus(a) {
+        if (!this.matchStarted || !a || !a.chibi || !a.chibi.container.active) return;
+        if (a === this.focusActor) return;
 
         if (!this.focusMarker) {
             this.focusMarker = this.add.ellipse(0, 0, 26, 12, C.numGold, 0.9);
@@ -608,26 +1158,13 @@ export class MatchDayScene extends Phaser.Scene {
         this.placeActor(a);
     }
 
-    passBallToRandomActor() {
-        if (!this.matchStarted || !this.actors.length) return;
-        const a = this.actors[Math.floor(Math.random() * this.actors.length)];
-        if (!a || !a.chibi || !a.chibi.container.active) return;
-        this.moveBall(
-            Phaser.Math.Clamp(a.fx + Phaser.Math.FloatBetween(-0.02, 0.02), 0.03, 0.97),
-            Phaser.Math.Clamp(a.fy + Phaser.Math.FloatBetween(-0.02, 0.02), 0.05, 0.95),
-            { duration: 700, air: 12 + Math.random() * 18, ease: 'Quad.easeOut' }
-        );
-    }
-
-    shootAtGoal(isHome, opts = {}) {
-        const fx = isHome ? 0.995 : 0.005;
-        const fy = 0.5 + Phaser.Math.FloatBetween(-0.045, 0.045);
-        this.moveBall(fx, fy, {
-            duration: opts.duration ?? 300,
-            air: opts.air ?? 34,
-            ease: 'Quad.easeIn',
-            onDone: opts.onDone,
-        });
+    /**
+     * Commentary that won't stamp on a scripted line. Flow chatter (tackles,
+     * interceptions) is lower priority than the engine's own events.
+     */
+    typewriterCommentIfIdle(text) {
+        if (this.commentaryLockUntil && this.time.now < this.commentaryLockUntil) return;
+        this.typewriterComment(text);
     }
 
     // ── SCOREBOARD ────────────────────────────────────────────────
@@ -892,11 +1429,22 @@ export class MatchDayScene extends Phaser.Scene {
 
         audioManager.init();
         audioManager.playGoal();
+        this.commentaryLockUntil = this.time.now + 2600;
 
-        // Ball arcs into the net
-        this.shootAtGoal(isHome, { duration: 320, air: 52 });
+        // The scorer strikes it himself, then the whole side celebrates and we
+        // reset to a kickoff for the team that conceded.
+        const team = isHome ? 'home' : 'away';
+        const scorer = this.findActorByName(event.data.scorer.name, team);
+        this.shootFromActor(scorer, 'goal', () => {
+            this.play.phase = 'celebrate';
+        });
 
         this.cameras.main.shake(320, 0.008);
+
+        this.time.delayedCall(3200, () => {
+            if (!this.matchStarted) return;
+            this.kickoff(isHome ? 'away' : 'home');
+        });
 
         this.time.delayedCall(300, () => {
             this.updateScoreboard(true);
@@ -978,17 +1526,22 @@ export class MatchDayScene extends Phaser.Scene {
     // ── SAVE ──────────────────────────────────────────────────────
     playSaveEvent(event) {
         const isHome = event.team === 'home';
-        this.shootAtGoal(isHome, {
-            duration: 280,
-            air: 40,
-            onDone: () => {
-                // Parried back out into play
-                this.moveBall(
-                    isHome ? 0.78 : 0.22,
-                    0.5 + Phaser.Math.FloatBetween(-0.2, 0.2),
-                    { duration: 520, air: 46, ease: 'Quad.easeOut' }
-                );
-            },
+        const team = isHome ? 'home' : 'away';
+        const shooter = this.findActorByName(event.data.shooter.name, team);
+        this.commentaryLockUntil = this.time.now + 1600;
+
+        this.shootFromActor(shooter, 'save', () => {
+            // Keeper parries it back into play, then his side builds from there
+            const outFx = isHome ? 0.74 : 0.26;
+            const outFy = 0.5 + Phaser.Math.FloatBetween(-0.2, 0.2);
+            this.moveBall(outFx, outFy, {
+                duration: 480, air: 46, ease: 'Quad.easeOut',
+                onDone: () => {
+                    if (!this.matchStarted) return;
+                    this.play.phase = 'build';
+                    this.play.ballLoose = true;   // scramble for the rebound
+                },
+            });
         });
 
         this.typewriterComment(
@@ -999,11 +1552,17 @@ export class MatchDayScene extends Phaser.Scene {
     // ── SHOT WIDE ─────────────────────────────────────────────────
     playShotWideEvent(event) {
         const isHome = event.team === 'home';
-        this.moveBall(
-            isHome ? 1.04 : -0.04,
-            Math.random() > 0.5 ? 0.16 : 0.84,
-            { duration: 340, air: 58, ease: 'Quad.easeIn' }
-        );
+        const team = isHome ? 'home' : 'away';
+        const shooter = this.findActorByName(event.data.shooter.name, team);
+        this.commentaryLockUntil = this.time.now + 1600;
+
+        this.shootFromActor(shooter, 'wide', () => {
+            if (!this.matchStarted) return;
+            // Goal kick to the other side
+            const gkFx = isHome ? 0.06 : 0.94;
+            this.restart(isHome ? 'away' : 'home', gkFx, 0.5, 600);
+        });
+
         this.typewriterComment(`${event.data.shooter.name} fires wide! Close but no cigar.`);
     }
 
@@ -1017,6 +1576,8 @@ export class MatchDayScene extends Phaser.Scene {
             : 0xffffff;
         this.flashScreen(tint, event.data.card ? 0.26 : 0.18);
 
+        this.commentaryLockUntil = this.time.now + 1800;
+
         if (event.data.card) {
             this.showCardAnimation(event.data.card);
             this.typewriterComment(
@@ -1027,6 +1588,15 @@ export class MatchDayScene extends Phaser.Scene {
         }
 
         this.showPlayerNameFlash(event.data.fouler.name);
+
+        // Whistle: play stops where the ball is, then the fouled side restarts.
+        // event.team is the side that committed the foul.
+        if (this.matchStarted && this.play) {
+            const fouledTeam = event.team === 'home' ? 'away' : 'home';
+            this.freezePlay(event.data.card ? 1100 : 700);
+            this.restart(fouledTeam, this.ballState.fx, this.ballState.fy,
+                event.data.card ? 1200 : 800);
+        }
     }
 
     flashScreen(color = 0xffffff, alpha = 0.2) {
@@ -1091,8 +1661,17 @@ export class MatchDayScene extends Phaser.Scene {
     // ── CHANCE ────────────────────────────────────────────────────
     playChanceEvent(event) {
         if (event.data && event.data.player) {
+            this.commentaryLockUntil = this.time.now + 1200;
             this.typewriterComment(`${event.data.player.name} creates a dangerous opportunity!`);
             this.showPlayerNameFlash(event.data.player.name);
+
+            // Hand that side the ball and send them upfield, so the "chance"
+            // actually looks like a surge rather than a caption.
+            if (this.matchStarted && this.play) {
+                const team = event.team === 'home' ? 'home' : 'away';
+                const maker = this.findActorByName(event.data.player.name, team);
+                this.forceAttack(team, maker);
+            }
         }
     }
 
@@ -1125,14 +1704,38 @@ export class MatchDayScene extends Phaser.Scene {
 
         a.chibi.hop(this, 7, 1);
 
+        // Players genuinely run now, so the tag has to track its owner —
+        // otherwise it's left stranded on empty grass. Only the rise and fade
+        // are tweened; the anchor is re-applied from the actor every frame.
+        const anim = { rise: 0 };
+        this.nameTags.push({ tag, actor: a, anim });
+
+        this.tweens.add({
+            targets: anim,
+            rise: 10,
+            duration: 1600,
+            delay: 700,
+        });
         this.tweens.add({
             targets: tag,
-            y: tag.y - 10,
             alpha: 0,
             duration: 1600,
             delay: 700,
-            onComplete: () => tag.destroy(),
+            onComplete: () => {
+                this.nameTags = this.nameTags.filter(n => n.tag !== tag);
+                tag.destroy();
+            },
         });
+    }
+
+    /** Keep floating name tags pinned above the player they belong to. */
+    updateNameTags() {
+        if (!this.nameTags || !this.nameTags.length) return;
+        for (const n of this.nameTags) {
+            const c = n.actor && n.actor.chibi;
+            if (!c || !c.container.active || !n.tag.active) continue;
+            n.tag.setPosition(c.x, c.y - 60 - n.anim.rise);
+        }
     }
 
     // ── HALF TIME ─────────────────────────────────────────────────
@@ -1163,7 +1766,6 @@ export class MatchDayScene extends Phaser.Scene {
         audioManager.stopCrowdAmbience();
 
         this.matchStarted = false;
-        if (this.ballLoop) this.ballLoop.remove(false);
 
         const banner = UI.banner(this, width / 2, height * 0.42, width, 'FULL TIME', {
             scale: 5,
@@ -1212,12 +1814,28 @@ export class MatchDayScene extends Phaser.Scene {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // UPDATE — drive the chibi walk cycles
+    // UPDATE — possession simulation, steering, then walk cycles
     // ═══════════════════════════════════════════════════════════════
     update(time, delta) {
         if (!this.actors || !this.actors.length) return;
-        for (const a of this.actors) {
-            if (a.chibi && a.chibi.container.active) a.chibi.tick(delta);
+
+        // delta is unscaled by timeScale, so fold the speed setting in here to
+        // keep the run cycles and movement in step at 2x and 4x.
+        const scaled = Math.min(delta, 50) * (this.gameSpeed || 1);
+        const dt = scaled / 1000;
+
+        if (this.matchStarted && this.play) {
+            this.updatePlay(dt, scaled);
+            this.assignJobs();
+            for (const a of this.actors) {
+                if (a.chibi && a.chibi.container.active) this.steerActor(a, dt);
+            }
         }
+
+        for (const a of this.actors) {
+            if (a.chibi && a.chibi.container.active) a.chibi.tick(scaled);
+        }
+
+        this.updateNameTags();
     }
 }
