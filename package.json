@@ -1,0 +1,11 @@
+{
+  "name": "three-kingdoms-soccer",
+  "version": "0.1.0",
+  "description": "A Romance of the Three Kingdoms soccer team simulation built with Phaser 3",
+  "scripts": {
+    "dev": "npx serve . -l 3000 --no-clipboard",
+    "start": "npx serve . -l 3000 --no-clipboard"
+  },
+  "keywords": ["phaser", "soccer", "three-kingdoms", "simulation"],
+  "license": "MIT"
+}

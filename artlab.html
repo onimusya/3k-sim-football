@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Art Lab — Character silhouettes</title>
+<style>
+  body { margin:0; background:#2f6f4f; display:flex; justify-content:center; }
+</style>
+</head>
+<body>
+<div id="game-container"></div>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+<script type="module">
+import { C, KIT, kitFor } from './src/art/Palette.js';
+import { PixelText } from './src/art/PixelFont.js';
+import { Chibi, lookForPlayer, chibiPortrait } from './src/art/Chibi.js';
+import * as UI from './src/art/UI.js';
+import { generatePlayers } from './src/data/teams.js';
+
+// Marquee warriors whose silhouettes should be individually recognisable
+const SHOWCASE = [
+  ['shu','Guan Yu'], ['shu','Zhang Fei'], ['shu','Zhao Yun'], ['shu','Zhuge Liang'],
+  ['shu','Liu Bei'], ['shu','Huang Zhong'],
+  ['wei','Cao Cao'], ['wei','Xu Chu'], ['wei','Zhang Liao'], ['wei','Dian Wei'],
+  ['wei','Sima Yi'], ['wei','Zhang He'],
+  ['lu','Lü Bu'], ['lu','Diao Chan'], ['lu','Gao Shun'],
+  ['wu','Sun Jian'], ['wu','Zhou Tai'], ['wu','Huang Gai'],
+  ['dong','Dong Zhuo'], ['dong','Hua Xiong'],
+  ['yuan','Yuan Shao'], ['yuan','Yan Liang'],
+];
+
+class Lab extends Phaser.Scene {
+  create() {
+    const W = 960, H = 640;
+    this.actors = [];
+
+    // bright backdrop
+    const g = this.add.graphics();
+    g.fillStyle(C.skyLight, 1); g.fillRect(0, 0, W, 150);
+    g.fillStyle(C.grass, 1); g.fillRect(0, 150, W, H - 150);
+    for (let x = 0; x < W; x += 80) { g.fillStyle(C.grassAlt,1); g.fillRect(x,150,40,H-150); }
+
+    const t = new PixelText(this, W/2, 12, 'CHARACTER SILHOUETTES', { scale:3, preset:'gold' });
+    t.setOrigin(0.5, 0);
+
+    // Row 1: full-body sprites at match scale, with names
+    const perRow = 11;
+    SHOWCASE.forEach(([kid, name], i) => {
+      const kit = kitFor(kid);
+      const roster = generatePlayers(kid);
+      const player = roster.find(p => p.name === name) || { name, stats:{} };
+      const look = lookForPlayer(player, kit);
+
+      const col = i % perRow;
+      const row = Math.floor(i / perRow);
+      const x = 52 + col * 82;
+      const y = 150 + row * 150;
+
+      const ch = new Chibi(this, x, y + 66, { ...look, px: 3 });
+      ch.setFacing('down', false);
+      ch.setWalking(true);
+      this.actors.push(ch);
+
+      // side-facing twin to check the profile masks
+      const ch2 = new Chibi(this, x + 30, y + 100, { ...look, px: 2 });
+      ch2.setFacing('side', true);
+      ch2.setWalking(true);
+      this.actors.push(ch2);
+
+      this.add.text(x, y + 76, name, {
+        fontFamily:'"Trebuchet MS",sans-serif', fontSize:'11px', color:'#ffffff',
+        fontStyle:'bold', stroke:'#24242c', strokeThickness:3,
+      }).setOrigin(0.5, 0);
+    });
+
+    // Row 3: portraits, to check they read in the roster UI
+    const p = UI.panel(this, 20, 470, 920, 150, 'Portraits');
+    SHOWCASE.slice(0, 11).forEach(([kid, name], i) => {
+      const kit = kitFor(kid);
+      const roster = generatePlayers(kid);
+      const player = roster.find(q => q.name === name) || { name };
+      p.add(chibiPortrait(this, 56 + i * 82, 74, lookForPlayer(player, kit), 62));
+      p.add(UI.label(this, 56 + i * 82, 112, name, {
+        size:10, bold:true, color:'#2b2b33', ox:0.5,
+      }));
+    });
+  }
+
+  update(_, delta) { this.actors.forEach(a => a.tick(delta)); }
+}
+
+new Phaser.Game({
+  type: Phaser.AUTO, width: 960, height: 640,
+  parent:'game-container', backgroundColor:'#7ec8e8', scene:[Lab],
+});
+</script>
+</body>
+</html>

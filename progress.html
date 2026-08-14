@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Three Kingdoms Soccer — Build Progress</title>
+<style>
+  :root{
+    --ink:#2b2b33; --gold:#c9a227; --sky:#7ec8e8; --grass:#5fbf3a;
+    --panel:#f0f8f8; --line:#d3dee0; --good:#2f9e1e; --bad:#c4342a; --warn:#d8a13a;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:"Trebuchet MS","Segoe UI",Verdana,sans-serif;
+    background:#2f6f4f;
+    background-image:repeating-linear-gradient(90deg,rgba(255,255,255,.03) 0 40px,rgba(0,0,0,.03) 40px 80px);
+    color:var(--ink); padding:24px;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+
+  header{
+    background:linear-gradient(#7ada52,#3f9e1e);
+    border:3px solid var(--ink); border-radius:10px;
+    padding:20px 24px; margin-bottom:22px;
+    box-shadow:0 6px 0 #1d1d24;
+  }
+  header h1{font-size:2rem;color:#fff;text-shadow:0 3px 0 #1d4a12;letter-spacing:1px}
+  header p{color:#eafbe0;margin-top:6px;font-size:.95rem}
+
+  section{
+    background:var(--panel); border:3px solid var(--ink); border-radius:10px;
+    margin-bottom:22px; overflow:hidden; box-shadow:0 6px 0 #1d1d24;
+  }
+  section > h2{
+    background:linear-gradient(#2f7fd8,#14539f); color:#fff;
+    font-size:1.05rem; padding:10px 16px; border-bottom:3px solid var(--ink);
+    text-shadow:0 2px 0 #0d2c52; letter-spacing:1px;
+  }
+  .body{padding:18px}
+
+  .frame{text-align:center;background:#e2eef0}
+  .frame iframe{border:0;display:block;margin:0 auto}
+  .links{padding:12px}
+  .links a{
+    display:inline-block;margin:0 6px;padding:8px 18px;
+    background:linear-gradient(#5cc236,#3f9e1e);color:#fff;text-decoration:none;
+    border:2px solid var(--ink);border-radius:6px;font-weight:bold;
+    box-shadow:0 3px 0 #1d1d24;
+  }
+  .links a.alt{background:linear-gradient(#2f7fd8,#14539f)}
+
+  table{width:100%;border-collapse:collapse;font-size:.9rem}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line)}
+  th{background:#e9f6ea;color:#14539f;text-transform:uppercase;font-size:.72rem;letter-spacing:1px}
+  td.num{font-family:ui-monospace,monospace;text-align:center;font-weight:bold}
+  .win{color:var(--good);font-weight:bold}
+  .lose{color:var(--bad);font-weight:bold}
+  .tie{color:var(--warn);font-weight:bold}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+  .shot{border:2px solid var(--ink);border-radius:8px;overflow:hidden;background:#fff}
+  .shot img{width:100%;display:block;image-rendering:pixelated}
+  .shot .cap{padding:8px 10px;font-size:.8rem;font-weight:bold;background:#f6e9a2;border-top:2px solid var(--ink)}
+
+  .ab{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  .ab .col h4{font-size:.8rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;color:#14539f}
+  .ab img{width:100%;border:2px solid var(--ink);border-radius:6px;display:block;image-rendering:pixelated}
+
+  .log{list-style:none}
+  .log li{
+    border-left:5px solid var(--gold); background:#fff;
+    padding:12px 16px; margin-bottom:10px; border-radius:0 6px 6px 0;
+    border-top:1px solid var(--line);border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+  }
+  .log .v{font-weight:bold;color:#14539f;font-size:.85rem;letter-spacing:.5px}
+  .log ul{margin:8px 0 0 18px;font-size:.87rem;color:#4a4a55}
+  .log li.crit{border-left-color:var(--bad)}
+  .note{font-size:.85rem;color:#5a5240;background:#fff8dc;border:1px solid #e0cf94;
+        border-radius:6px;padding:9px 12px;margin-bottom:14px}
+  .missing{
+    border:2px dashed #b9c2b4;border-radius:6px;background:#eef4f2;color:#7a8a80;
+    display:flex;align-items:center;justify-content:center;text-align:center;
+    font-size:.82rem;padding:34px 14px;
+  }
+  .log li.crit .v{color:var(--bad)}
+  .quote{
+    background:#fff8dc;border:2px dashed #d8a13a;border-radius:6px;
+    padding:10px 14px;margin:10px 0;font-style:italic;color:#6a5320;font-size:.88rem;
+  }
+  .tags span{
+    display:inline-block;background:#e9f6ea;border:1px solid #a9c9aa;
+    padding:4px 10px;border-radius:5px;font-size:.78rem;margin:3px;color:#1f6b32;font-weight:bold;
+  }
+  footer{text-align:center;color:#dff3e6;font-size:.8rem;padding:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>三國蹴鞠 &nbsp;Three Kingdoms Soccer</h1>
+    <p>A Romance of the Three Kingdoms football management sim — Phaser 3, no build step, all art generated in code.
+       Benchmarked against <strong>Pocket League Story</strong>.</p>
+  </header>
+
+  <section>
+    <h2>Live build</h2>
+    <div class="frame">
+      <iframe src="index.html" width="980" height="660" allow="autoplay"></iframe>
+    </div>
+    <div class="links" style="text-align:center">
+      <a href="index.html" target="_blank">Play full screen</a>
+      <a class="alt" href="artlab.html" target="_blank">Character sheet</a>
+    </div>
+  </section>
+
+  <section>
+    <h2>Blind A/B — latest critic pass</h2>
+    <div class="body">
+      <p style="font-size:.9rem;margin-bottom:12px">
+        Scored by a critic given both sets of screenshots with no indication of which was which.
+        Set&nbsp;A = Pocket League Story, Set&nbsp;B = ours.
+      </p>
+      <table>
+        <tr><th>Dimension</th><th>Reference</th><th>Ours</th><th>Winner</th></tr>
+        <tr><td>Visual appeal / craft</td><td class="num">8</td><td class="num">7</td><td class="lose">Reference (narrow)</td></tr>
+        <tr><td>Clarity</td><td class="num">6</td><td class="num">8</td><td class="win">Ours</td></tr>
+        <tr><td>Personality / charm</td><td class="num">9</td><td class="num">6</td><td class="lose">Reference</td></tr>
+        <tr><td>Character art</td><td class="num">8</td><td class="num">4</td><td class="lose">Reference</td></tr>
+        <tr><td>Environment richness</td><td class="num">9</td><td class="num">4</td><td class="lose">Reference</td></tr>
+        <tr><td>UI polish</td><td class="num">7</td><td class="num">7</td><td class="tie">Tie</td></tr>
+        <tr><td>Information density</td><td class="num">7</td><td class="num">8</td><td class="win">Ours</td></tr>
+        <tr><td>Desire to keep playing</td><td class="num">8</td><td class="num">5</td><td class="lose">Reference</td></tr>
+      </table>
+      <div class="quote">
+        “Set A is a place; Set B is a spreadsheet with a football-coloured skin.”
+        — the separator that drove the current round of work.
+      </div>
+      <p style="font-size:.88rem">
+        <strong>Status:</strong> reference still wins overall. The three losing dimensions were all traced to two
+        root causes: every character was one sprite recoloured, and the crowd was 2×3-pixel blobs. Both have since
+        been rebuilt (see v0.6 below) and are pending a re-score.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Side by side</h2>
+    <div class="body">
+      <p class="note">
+        The reference screenshots are Pocket League Story, © Kairosoft. They were fetched locally for
+        art-direction comparison and are deliberately not committed, so these two panels are empty in a
+        fresh clone. Everything on the right is ours.
+      </p>
+      <div class="ab">
+        <div class="col">
+          <h4>Reference — match view</h4>
+          <img src=".reference/pls_2.jpg" alt="Pocket League Story match view"
+               onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'missing',textContent:'Reference image not included in the repo'}))">
+        </div>
+        <div class="col">
+          <h4>Ours — match view</h4>
+          <img src=".shots/j1_match.png" alt="Our match view">
+        </div>
+      </div>
+      <div class="ab" style="margin-top:16px">
+        <div class="col">
+          <h4>Reference — player select</h4>
+          <img src=".reference/pls_3.jpg" alt="Pocket League Story player select"
+               onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'missing',textContent:'Reference image not included in the repo'}))">
+        </div>
+        <div class="col">
+          <h4>Ours — squad management</h4>
+          <img src=".shots/h3_team.png" alt="Our squad screen">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Current screens</h2>
+    <div class="body">
+      <div class="grid">
+        <div class="shot"><img src=".shots/g1_menu.png"  alt="Title screen"><div class="cap">Title — kingdom select</div></div>
+        <div class="shot"><img src=".shots/h3_team.png"  alt="Squad"><div class="cap">Squad management</div></div>
+        <div class="shot"><img src=".shots/j1_match.png" alt="Match"><div class="cap">Match day</div></div>
+        <div class="shot"><img src=".shots/h4_league.png" alt="League"><div class="cap">League table</div></div>
+        <div class="shot"><img src=".shots/i1_match.png" alt="Result"><div class="cap">Post-match report</div></div>
+        <div class="shot"><img src=".shots/i3_chars.png" alt="Characters"><div class="cap">Character silhouettes</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Build log</h2>
+    <div class="body">
+      <ul class="log">
+        <li>
+          <div class="v">v0.6 — Character identity &amp; crowd (current)</div>
+          <ul>
+            <li>Silhouette features added to the chibi generator: tapering beards, plumed helmets with widened brims, spiked coronets, heavy builds — applied per named warrior, so Guan Yu, Lü Bu, Zhang Fei and Cao Cao are recognisable at 34px</li>
+            <li>Crowd rebuilt from 2×3px blobs into outlined 7×9 people with head, hair, shoulders and arms, plus scattered empty seats so attendance reads</li>
+            <li>Stat bars gained a dark value well so numerals read on any fill colour</li>
+            <li>Fixed a real bug: pixel-font shadows were declared as <code>0x00000055</code>, which Phaser reads as opaque navy — every gold numeral carried a blue fringe</li>
+          </ul>
+        </li>
+        <li class="crit">
+          <div class="v">Critic pass 3 — blind A/B</div>
+          <ul>
+            <li>Reference won 62–49. Decisive losses on character art and environment richness</li>
+            <li>Root causes named: one sprite recoloured six times; placeholder crowd; match screen shows a formation, not a moment</li>
+          </ul>
+        </li>
+        <li>
+          <div class="v">v0.5 — Inhabited world</div>
+          <ul>
+            <li>Replaced three duplicate wallpaper backgrounds with a shared <code>stadiumBackdrop</code>: skyline, road, trees, floodlights, terraces, crowd, plus chibi figures strolling through the gaps</li>
+            <li>Terraces wrap behind both goals; near-side hoarding made symmetric; dugouts added</li>
+            <li>League panel height made data-driven, form pips added; scorers panel filled with secondary match events; result callout given rounded corners</li>
+          </ul>
+        </li>
+        <li class="crit">
+          <div class="v">Critic pass 2</div>
+          <ul>
+            <li>“Ours is a UI laid over wallpaper; theirs is an inhabited place with a UI on top.”</li>
+            <li>Also caught: <code>UI.panel</code> assigned <code>.body</code>, colliding with Phaser's physics slot and crashing on teardown</li>
+          </ul>
+        </li>
+        <li>
+          <div class="v">v0.4 — Art direction rebuild</div>
+          <ul>
+            <li>Checked the actual reference screenshots and found the art direction inverted: we were dark/flat/circles, it is bright/isometric/chibi</li>
+            <li>Built a new art layer: <code>Palette</code>, <code>PixelFont</code> (chunky outlined bitmap glyphs), <code>Chibi</code> (procedural characters), <code>UI</code> (white panels with blue title bars, chips, badges, stat bars), <code>IsoWorld</code> (sheared-projection pitch, stands, crowd, town)</li>
+            <li>All five scenes rebuilt onto it</li>
+          </ul>
+        </li>
+        <li class="crit">
+          <div class="v">Critic pass 1 — “Potemkin village”</div>
+          <ul>
+            <li>Traits and formations were printed in the UI but ignored by the match engine; no season arc, no economy</li>
+          </ul>
+        </li>
+        <li>
+          <div class="v">v0.3 — Decisions matter</div>
+          <ul>
+            <li>Match engine rewritten: formation-weighted zone strength, 60+ traits with real effects</li>
+            <li>Season structure, weekly income vs wages, facilities, 10 random events with real consequences</li>
+          </ul>
+        </li>
+        <li>
+          <div class="v">v0.1–0.2 — Foundation</div>
+          <ul>
+            <li>Six kingdoms, 66 warriors, match simulation, five scenes, procedural audio</li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Under the hood</h2>
+    <div class="body tags">
+      <span>Phaser 3.60</span><span>ES modules</span><span>No build step</span>
+      <span>Zero art assets — all sprites generated in code</span>
+      <span>Procedural bitmap font</span><span>Web Audio API</span>
+      <span>Sheared isometric projection</span><span>Formation + trait driven simulation</span>
+    </div>
+  </section>
+
+  <footer>Built with Kiro · benchmarked against Pocket League Story</footer>
+</div>
+</body>
+</html>

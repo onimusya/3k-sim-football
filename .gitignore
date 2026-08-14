@@ -1,0 +1,19 @@
+# Third-party reference screenshots (Pocket League Story, © Kairosoft).
+# Fetched locally for art-direction comparison only — not ours to redistribute.
+# progress.html degrades gracefully when these are absent.
+.reference/
+
+# Dev tooling artefacts
+.playwright-mcp/
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# OS / editor cruft
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+.idea/
+.vscode/
