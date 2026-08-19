@@ -29,7 +29,7 @@ You pick one of six kingdoms (Wei, Shu, Wu, Dong Zhuo's coalition, Yuan Shao's a
 
 ### Art layer
 
-Everything visual is generated at runtime from `src/art/`:
+Everything visual is generated at runtime from `app/art/`:
 
 - **Palette** — bright saturated colour system with per-kingdom kits
 - **PixelFont** — 5×7 bitmap glyphs rendered with a hard outline and rim highlight; used for every numeral
@@ -58,7 +58,7 @@ progress.html       Build history + blind A/B comparison page
 artlab.html         Character silhouette showcase
 package.json        Metadata only (no dependencies)
 
-src/
+app/
   main.js           Phaser config + scale management
   art/
     Palette.js      Colours, kit definitions, stat helpers

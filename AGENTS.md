@@ -41,7 +41,7 @@ Key principle: **the critic must inspect real output, not descriptions**. Every 
 
 ## Art API contract
 
-Every scene imports from `src/art/` and must follow these rules:
+Every scene imports from `app/art/` and must follow these rules:
 
 - **Numbers** are always `PixelText`, never `scene.add.text` for digits
 - **Panels** use `UI.panel()` which exposes `.bodyRect` (NOT `.body` — that slot is reserved by Phaser for physics bodies and causes crashes on destroy)
@@ -83,7 +83,7 @@ momentary sprite overlaps.
 
 ## Persistence
 
-`src/engine/SaveGame.js` owns the save. One slot in `localStorage` under
+`app/engine/SaveGame.js` owns the save. One slot in `localStorage` under
 `threeKingdomsSoccer.save.v1`, roughly 2 KB of JSON.
 
 The hook is deliberately indirect. `SaveGame.attachAutosave(game)` (called once in
@@ -142,14 +142,36 @@ with the code under test. This cost two debugging cycles.
 
 ## Deployment
 
-Static deploy to Vercel: `vercel --prod` from the project root, config in
-`vercel.json` (no build step, `outputDirectory: "."`).
+Static deploy to Vercel: `vercel --prod --scope francis-hors-projects` from the
+project root, config in `vercel.json` (no build step, `outputDirectory: "."`).
+Without the explicit `--scope` the CLI fails with a bare `Error: Not authorized`,
+because the `orgId` cached in `.vercel/project.json` no longer matches the team.
 
-**`/src/**` must send a revalidating `Cache-Control`.** The filenames are
+**`/app/**` must send a revalidating `Cache-Control`.** The filenames are
 unversioned — there is no content hashing — so an `immutable` long-max-age header
 pins returning visitors to whichever copy of the source their browser cached.
-This actually happened: a deploy shipped correct code while the live site kept
-executing the previous build. Only `/.shots/**` is safe to cache hard.
+
+This is the most expensive bug the project has had, and it bit twice:
+
+1. First a deploy shipped correct code while the live site kept executing the
+   previous build. Fixing the header stopped *new* poisoning.
+2. It did not fix browsers already poisoned. A month later, save/load looked
+   completely broken in production: `localStorage` stayed empty and no *Welcome
+   Back* card appeared. The cause was not the save code. All 17 modules were
+   being served from the browser's own cache under
+   `immutable, max-age=31536000`, so the page was executing a `main.js` from
+   before `SaveGame` existed. Fetching the same URL with `cache: 'no-store'`
+   returned the new file, which is what makes this so easy to misdiagnose —
+   `curl` and a manual `fetch` both look correct while the page runs old code.
+
+A revalidating header cannot evict an entry a browser was already told to keep
+for a year. The only fix is a new URL, so the module directory was renamed
+`src/` → `app/`. If this ever happens again, rename it again rather than trying
+to reason with the cache. Only `/.shots/**` is safe to cache hard.
+
+When verifying a deploy, check what the page *executed*, not what the server
+sends. `window.game.registry.events.listenerCount('changedata-gameState')`
+should be `1`; `0` means an old `main.js` is running.
 
 ## Resuming work
 

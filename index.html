@@ -57,6 +57,11 @@
 <body>
     <div id="game-container"></div>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
-    <script type="module" src="src/main.js"></script>
+    <!-- Modules live under /app/, not /src/. An early deploy sent
+         `immutable, max-age=31536000` for /src/**, so browsers that visited then
+         had every module pinned for a year and no later deploy could reach them.
+         Renaming the directory changes every URL, which is the only thing that
+         evicts an immutable entry. See AGENTS.md → Deployment. -->
+    <script type="module" src="app/main.js"></script>
 </body>
 </html>
