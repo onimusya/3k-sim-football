@@ -196,7 +196,19 @@
     <div class="body">
       <ul class="log">
         <li>
-          <div class="v">v0.8 — Progress persists (current)</div>
+          <div class="v">v0.9 — The ball became a ball (current)</div>
+          <ul>
+            <li>The football was <code>add.circle(x, y, 6, 0xffffff)</code> — a white dot that read as a rendering artefact, and with no features on it a 30-yard pass looked like a dot sliding across the grass</li>
+            <li><code>Ball.js</code> now generates a real panelled football by sampling a sphere: take each pixel's surface normal, un-rotate it, and darken it if it lands on one of the 12 pentagon centres of a truncated icosahedron. Twelve rotation phases bake into a frame strip, so spin is a frame lookup rather than per-frame drawing</li>
+            <li>Spin is driven by ground covered rather than a timer, so it accelerates off a strike and dies away as the ball settles — about 2.8 rotations a second in ordinary play</li>
+            <li>Strikes have weight now: the ball squashes along its travel, a white impact star pops, turf scuffs up, a ghost trail follows the ball while it is genuinely flying, and it kicks dust on landing</li>
+            <li>Players got a kick pose — leg swung through with the boot clear of the turf, plus the whole body leaning over the planted foot. At 32px a single frame change is easy to miss; a body tipping over is not</li>
+            <li>The gold halo that used to ring the ball is gone. It existed because a white dot was unfindable, and it fought the new panels for the same 16px. A thin white ring on the turf does the job instead — and stays useful with the ball in the air above it</li>
+            <li>Tuning notes worth keeping: the geometrically correct pentagon radius produces a <em>dark</em> ball with white speckles at this resolution, because a chunky pixel near the rim over-claims its slice of the sphere. And a packed frame strip needs a transparent gutter plus point sampling, or every frame bleeds into its neighbour</li>
+          </ul>
+        </li>
+        <li>
+          <div class="v">v0.8 — Progress persists</div>
           <ul>
             <li>The campaign lived only in Phaser's in-memory registry, so a refresh threw away the squad, gold, season and trophies. <code>SaveGame.js</code> now mirrors it to <code>localStorage</code></li>
             <li>Autosave hangs off the registry's <code>changedata-gameState</code> event with a 400 ms debounce, so every existing and future write site is covered without touching it — plus a <code>pagehide</code> flush for tabs closed inside the debounce window</li>

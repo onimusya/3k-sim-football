@@ -7,12 +7,22 @@ import { PixelText } from '../art/PixelFont.js';
 import { Chibi, lookForPlayer, chibiPortrait } from '../art/Chibi.js';
 import * as UI from '../art/UI.js';
 import { IsoPitch, formationPositions } from '../art/IsoWorld.js';
+import { MatchBall } from '../art/Ball.js';
 
 // Depth bands. The pitch itself owns 0..9000 (sky 0 → near hoarding 9000).
 const D = {
-    ballShadow: 7990,
-    ballGlow: 7994,
-    ballRing: 7996,
+    // The ball's shadow is a decal on the grass and sits below every player
+    // (who occupy 1000..1840 via IsoPitch.depthAt), so a player standing over
+    // the ball hides it, as a mark on the turf should be hidden.
+    ballDecal: 950,
+    // The findability marker does NOT get that treatment. The ball spends most
+    // of its life at somebody's feet, so an occluded marker is an absent marker,
+    // and finding the ball in a six-player scramble is exactly when it is
+    // needed. It rides just under the ball instead.
+    ballMarker: 7996,
+    // The ball itself deliberately breaks depth sorting and draws above all 22
+    // sprites. Losing it behind a shoulder for half a second is worse than the
+    // occasional wrong overlap.
     ball: 8000,
     nameTag: 8500,
     hud: 12000,
@@ -62,7 +72,6 @@ export class MatchDayScene extends Phaser.Scene {
         this.speedButtons = [];
         this.speedPlate = null;
         this.ball = null;
-        this.ballShadow = null;
         this.pitch = null;
         this.commentaryText = null;
         this.clockText = null;
@@ -903,6 +912,11 @@ export class MatchDayScene extends Phaser.Scene {
         const tx = Phaser.Math.Clamp(receiver.fx + (Math.random() - 0.5) * 0.02, 0.03, 0.97);
         const ty = Phaser.Math.Clamp(receiver.fy + (Math.random() - 0.5) * 0.02, 0.06, 0.94);
 
+        // Kick before the tween starts, so the swing and the ball leaving happen
+        // on the same frame. Longer balls get struck harder.
+        const range = Math.hypot(tx - this.ballState.fx, (ty - this.ballState.fy) * 0.45);
+        this.strike(from, tx, ty, Phaser.Math.Clamp(0.45 + range * 2.2, 0.45, 1));
+
         this.moveBall(tx, ty, {
             duration: opts.duration ?? 420,
             air: opts.air ?? 16,
@@ -974,6 +988,9 @@ export class MatchDayScene extends Phaser.Scene {
             ? Phaser.Math.Clamp(goalFx + dir * 0.045, -0.04, 1.04)
             : goalFx;
 
+        // Full-power strike: biggest squash, biggest star, hardest spin
+        this.strike(shooter, targetFx, targetFy, 1);
+
         this.moveBall(targetFx, targetFy, {
             duration: outcome === 'wide' ? 340 : 300,
             air: outcome === 'wide' ? 58 : 40,
@@ -1033,41 +1050,14 @@ export class MatchDayScene extends Phaser.Scene {
 
     // ── BALL ──────────────────────────────────────────────────────
     createBall() {
-        const pos = this.pitch.ballPos(0.5, 0.5, 0);
-
-        this.ballShadow = this.add.ellipse(pos.x, pos.groundY + 2, 12, 6, 0x000000, 0.3)
-            .setDepth(D.ballShadow);
-
-        // Soft glow + a thin bright ring that pulses, so a 6px white dot stays
-        // findable among 22 sprites. Both sit just under the ball's depth.
-        this.ballGlow = this.add.circle(pos.x, pos.y, 13, C.numGold, 0.20)
-            .setDepth(D.ballGlow);
-        this.ballRing = this.add.circle(pos.x, pos.y, 11, 0xffffff, 0)
-            .setDepth(D.ballRing);
-        this.ballRing.setStrokeStyle(2, C.numGold, 0.95);
-
-        this.tweens.add({
-            targets: this.ballRing,
-            scale: 1.32,
-            alpha: 0.35,
-            duration: 620,
-            yoyo: true,
-            repeat: -1,
-            ease: 'Sine.easeInOut',
+        // MatchBall owns the sprite, ground shadow, findability marker, airborne
+        // trail and impact effects. `this.ball` stays pointed at it so the rest
+        // of the scene keeps its existing null/active checks.
+        this.ball = new MatchBall(this, {
+            depth: D.ball,
+            shadowDepth: D.ballDecal,
+            markerDepth: D.ballMarker,
         });
-        this.tweens.add({
-            targets: this.ballGlow,
-            scale: 1.18,
-            alpha: 0.34,
-            duration: 620,
-            yoyo: true,
-            repeat: -1,
-            ease: 'Sine.easeInOut',
-        });
-
-        this.ball = this.add.circle(pos.x, pos.y, 6, 0xffffff).setDepth(D.ball);
-        this.ball.setStrokeStyle(2, C.panelEdge, 1);
-
         this.placeBall();
         // Possession is driven per-frame from update() — no random ball loop.
     }
@@ -1076,13 +1066,28 @@ export class MatchDayScene extends Phaser.Scene {
         if (!this.ball || !this.ball.active) return;
         const b = this.ballState;
         const p = this.pitch.ballPos(b.fx, b.fy, b.air);
-        this.ball.setPosition(p.x, p.y);
-        if (this.ballRing) this.ballRing.setPosition(p.x, p.y);
-        if (this.ballGlow) this.ballGlow.setPosition(p.x, p.y);
-        this.ballShadow.setPosition(p.x, p.groundY + 2);
-        const s = Math.max(0.5, 1 - b.air / 140);
-        this.ballShadow.setScale(s);
-        this.ballShadow.setAlpha(0.3 * s);
+        // Raw loop delta, not the match-speed-scaled one: the trail's spacing
+        // should be even on screen regardless of how fast the clock is running.
+        this.ball.place(p.x, p.y, p.groundY, b.air, this.game.loop.delta);
+    }
+
+    /**
+     * Everything that happens at the instant the ball leaves a foot: the striker
+     * swings, the ball squashes, a white star pops and the turf scuffs.
+     * Called from the pass and shot paths so it always lands on the same frame
+     * the ball starts travelling.
+     */
+    strike(kicker, toFx, toFy, power = 1) {
+        if (!this.ball || !this.ball.active) return;
+        const b = this.ballState;
+        const dirX = Math.sign(toFx - b.fx) || 1;
+
+        const p = this.pitch.ballPos(b.fx, b.fy, b.air);
+        this.ball.kick(p.x, p.y, dirX, Math.sign(toFy - b.fy), power);
+
+        if (kicker && kicker.chibi && kicker.chibi.container.active) {
+            kicker.chibi.kick(this, dirX);
+        }
     }
 
     /** Tween the ball through field space with an optional air arc. */
@@ -1534,6 +1539,8 @@ export class MatchDayScene extends Phaser.Scene {
             // Keeper parries it back into play, then his side builds from there
             const outFx = isHome ? 0.74 : 0.26;
             const outFy = 0.5 + Phaser.Math.FloatBetween(-0.2, 0.2);
+            // The parry is an impact too — no kicker, so just the ball reacts
+            this.strike(null, outFx, outFy, 0.85);
             this.moveBall(outFx, outFy, {
                 duration: 480, air: 46, ease: 'Quad.easeOut',
                 onDone: () => {

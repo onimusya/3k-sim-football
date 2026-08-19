@@ -9,6 +9,7 @@ import { PixelText } from '../art/PixelFont.js';
 import { Chibi, lookForPlayer, chibiPortrait } from '../art/Chibi.js';
 import * as UI from '../art/UI.js';
 import { IsoPitch } from '../art/IsoWorld.js';
+import { ensureBallTexture, kickBurst, turfDust, BALL_FRAMES } from '../art/Ball.js';
 import { SaveGame } from '../engine/SaveGame.js';
 
 // Depth bands. The pitch owns 0..9000 (sky 0 → near hoarding 9000).
@@ -322,10 +323,13 @@ export class MainMenuScene extends Phaser.Scene {
             });
         });
 
-        // The ball
+        // The ball. Same panelled football the match uses, rather than the flat
+        // UI glyph — this is the first football anyone sees, and it spins.
         this.ballF = { fx: 0.5, fy: 0.74, tx: 0.5, ty: 0.74, speed: 0.5, travelled: 0, total: 1, air: 0 };
         this.ballShadow = this.add.ellipse(0, 0, 12, 5, 0x000000, 0.26).setDepth(D.ballShadow);
-        this.ball = UI.icon(this, 0, 0, 'ball', 15).setDepth(D.ball);
+        this.ball = this.add.image(0, 0, ensureBallTexture(this), 0).setDepth(D.ball);
+        this.ballSpin = 0;
+        this.ballLastX = null;
         this.pickBallTarget();
     }
 
@@ -376,6 +380,16 @@ export class MainMenuScene extends Phaser.Scene {
         const bp = this.pitch.ballPos(b.fx, b.fy, b.air);
         this.ball.setPosition(bp.x, bp.y);
         this.ball.setDepth(this.pitch.depthAt(b.fx, b.fy) + 6);
+
+        // Roll the panels by ground covered, same rule as the match ball
+        if (this.ballLastX !== null) {
+            const moved = Math.hypot(bp.x - this.ballLastX, bp.y - this.ballLastY);
+            this.ballSpin += moved / 13;
+            this.ball.setFrame(Math.round(this.ballSpin) % BALL_FRAMES);
+            this.ball.setRotation(this.ball.rotation + (bp.x - this.ballLastX) / 26);
+        }
+        this.ballLastX = bp.x;
+        this.ballLastY = bp.y;
         this.ballShadow.setPosition(bp.x, bp.groundY);
         this.ballShadow.setScale(1 - b.air / 60);
         this.ballShadow.setDepth(this.pitch.depthAt(b.fx, b.fy) + 4);
@@ -407,8 +421,13 @@ export class MainMenuScene extends Phaser.Scene {
             if (inRange && a.cooldown <= 0 && b.air < 6
                 && Math.hypot(b.fx - a.fx, b.fy - a.fy) < 0.055) {
                 a.cooldown = 900;
-                a.chibi.hop(this, 8, 1);
                 this.pickBallTarget();
+                // Swing at it and scuff the turf. Target is picked first so the
+                // lean points where the ball is actually going.
+                a.chibi.kick(this, Math.sign(b.tx - b.fx) || 1);
+                const hit = this.pitch.ballPos(b.fx, b.fy, b.air);
+                kickBurst(this, hit.x, hit.y, this.ball.depth + 1, 0.7);
+                turfDust(this, hit.x, hit.groundY, this.ball.depth - 1, 3);
             }
 
             const p = this.pitch.project(a.fx, a.fy);

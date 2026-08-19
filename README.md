@@ -29,7 +29,9 @@ You pick one of six kingdoms (Wei, Shu, Wu, Dong Zhuo's coalition, Yuan Shao's a
 
 ### Art layer
 
-Everything visual is generated at runtime from `app/art/`:
+Everything visual is generated at runtime from `app/art/` — including the ball,
+whose panels come from sampling a sphere against the 12 pentagon centres of a
+truncated icosahedron, baked into a 12-phase rotation strip so it rolls:
 
 - **Palette** — bright saturated colour system with per-kingdom kits
 - **PixelFont** — 5×7 bitmap glyphs rendered with a hard outline and rim highlight; used for every numeral
@@ -37,12 +39,13 @@ Everything visual is generated at runtime from `app/art/`:
 - **UI** — white dialog panels with blue gradient title bars, cream list rows, coloured stat bars with dark value wells, HUD chips, position badges, chunky 3D buttons
 - **IsoWorld** — sheared-projection pitch (not 45° iso, so both goals stay on a 960×640 canvas) with mown grass, full markings, wrap-around terraces, ~330 individual spectators, town skyline, floodlights, and advertising hoarding
 - **Backdrop** — shared inhabited stadium behind the menu-style scenes, with chibi figures strolling through the gaps
+- **Ball** — panelled football with 12 baked rotation phases; spin comes from ground covered rather than a clock, so it accelerates off a strike and settles on its own. Strikes squash the ball, throw an impact star, scuff turf and leave a trail while it flies
 
 ### Scenes
 
 1. **MainMenuScene** — sunny stadium backdrop, kingdom selection cards with chibi portraits, background kickabout
 2. **TeamManagementScene** — squad roster, player detail with animated stat bars, formation editor on a mini iso pitch, Train / Recruit / Tactics / Rest overlays
-3. **MatchDayScene** — pre-match intro, 22 animated chibi actors on the iso pitch, typewriter commentary, speed controls, goal celebrations with confetti and crowd cheer
+3. **MatchDayScene** — pre-match intro, 22 animated chibi actors on the iso pitch, a per-frame possession model (carrying, passing, pressing, set pieces) with kick poses and impact effects, typewriter commentary, speed controls, goal celebrations with confetti and crowd cheer
 4. **MatchResultScene** — result banner, mirrored stat bars, scorers + secondary events, economy summary with animated gold counter, season progress bar
 5. **LeagueScene** — standings with form pips, fixtures, league leaders (top scorers / assists / cards)
 
@@ -63,7 +66,8 @@ app/
   art/
     Palette.js      Colours, kit definitions, stat helpers
     PixelFont.js    Bitmap glyph renderer + PixelText class
-    Chibi.js        Procedural character sprites
+    Chibi.js        Procedural character sprites + walk/kick poses
+    Ball.js         Panelled football, rotation strip, impact effects
     UI.js           Panel/button/statBar/chip/badge widgets
     IsoWorld.js     Isometric pitch + stands + crowd + town
     Backdrop.js     Shared stadium behind menu scenes

@@ -46,6 +46,7 @@ Every scene imports from `app/art/` and must follow these rules:
 - **Numbers** are always `PixelText`, never `scene.add.text` for digits
 - **Panels** use `UI.panel()` which exposes `.bodyRect` (NOT `.body` — that slot is reserved by Phaser for physics bodies and causes crashes on destroy)
 - **Characters** use `Chibi` class, anchored at the feet, with `lookForPlayer(player, kit)` for deterministic appearance
+- **The football** is `MatchBall` from `Ball.js`, never a plain circle. `ensureBallTexture(scene)` gives the bare texture if you only need a static ball (the menu kickabout uses it that way)
 - **Pitch** uses `IsoPitch` with the sheared projection (not 45° iso)
 - **Backdrop scenes** (TeamManagement, League, MatchResult) use `stadiumBackdrop()` from `Backdrop.js` and must call `.tick(delta)` in their `update()` loop
 - **Depth bands** are documented at the top of each scene file
@@ -128,11 +129,70 @@ stalls Phaser's clock — `delayedCall` and `scene.start` appear to hang, and ev
 `waitForFunction` on scene state times out for reasons that have nothing to do
 with the code under test. This cost two debugging cycles.
 
+## The football
+
+`app/art/Ball.js`. Two problems it exists to solve: the ball was
+`add.circle(x, y, 6, 0xffffff)`, which reads as a rendering artefact rather than a
+football, and a circle has no features, so a 30-yard pass looked like a dot
+sliding across the grass.
+
+The panels come from sampling a sphere: for every pixel inside the circle, take
+the surface normal, un-rotate it by the current phase, and mark it dark if it
+falls within `PANEL_COS` of one of the 12 icosahedron vertices (the pentagon
+centres of a truncated icosahedron). Rotating through 12 phases bakes a frame
+strip, so spin is a frame lookup rather than per-frame drawing.
+
+Things that will bite whoever tunes this:
+
+- **`PANEL_COS` is not the geometrically correct value.** At 8x8 chunky pixels a
+  cell near the rim covers a large slice of the sphere and over-claims, so the
+  real ~25° pentagon radius produced a dark ball with white speckles — the exact
+  inverse of a football. It is tuned by eye instead, and any change to `GRID`
+  needs it retuned.
+- **Two tones per ramp, not three.** With a 2px outline eating the whole rim,
+  a three-step ramp left almost no pure white and the ball went grey.
+- **The frame strip needs a transparent gutter and NEAREST filtering.** The game
+  does not set `pixelArt` globally, so packed frames otherwise bleed into each
+  other and the ball picks up a ghost rim.
+- **Spin is driven by distance covered, not a clock.** `spin += moved / 13`. It
+  accelerates off a strike and dies away as the ball settles for free, and it
+  means spin cannot desync from motion. Healthy figure during ordinary play is
+  around 2.8 rotations/second.
+
+`MatchDayScene.strike(kicker, toFx, toFy, power)` is the single place where a
+kick happens: it squashes the ball along its travel, throws a white star, scuffs
+turf, adds spin, and swings the kicker's leg. Call it immediately *before*
+`moveBall()` so the swing and the ball leaving land on the same frame.
+
+Depths are deliberately inconsistent and it is not a bug. The ball's shadow is a
+decal at `D.ballDecal` (950), below every player, so a player standing over the
+ball hides it. The findability ring is at `D.ballMarker` (7996) — above players,
+because the ball spends most of its life at somebody's feet and an occluded
+marker is an absent marker. The ball itself is at 8000 and never occluded:
+losing it behind a shoulder is worse than an occasional wrong overlap.
+
+### Kick pose
+
+`Chibi.kick(scene, dirX)` selects leg variant 3 and leans the sprite over its
+planted foot. Both halves are needed — at 32px a single frame change is easy to
+miss, but the whole body tipping is not.
+
+The pose only reads if the swung boot is pushed fully clear of the torso, which
+is why `LEGS_SIDE[3]` starts at column 0. Boots, outline and most hair are all
+near-black, so a raised foot tucked under the body just thickens the dark mass at
+the bottom of the sprite and reads as nothing. The boot also has to leave the
+turf line (nothing on row 15 beneath it) so the outline pass draws air under it.
+
+`kicking` is checked in both `setWalking()` and `tick()`: the scene calls
+`setWalking()` every frame, so without the guard the pose is overwritten before
+anyone sees it.
+
 ## Known issues and next steps
 
-1. **Match moments still lack impact.** Possession, runs, passing and pressing now
-   read correctly, but there are no impact starbursts on tackles, no dedicated
-   kick or dive poses, and no mini-map. The chibi has only walk frames.
+1. **Match moments still lack impact.** Possession, runs, passing and pressing
+   read correctly, and strikes now have a kick pose, ball squash, impact star and
+   turf scuff. Still missing: impact effects on *tackles*, a keeper dive pose, and
+   a mini-map.
 2. **Environment richness.** The terraces and town skyline are there, but there
    are no kiosks, parked cars or animated flag poles — the detail that makes
    Kairosoft's world feel inhabited at rest.

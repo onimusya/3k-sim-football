@@ -219,17 +219,28 @@ function faceSide(crown, feature) {
     return rows;
 }
 
-// Leg variants for walk cycle (rows 14 & 15)
+// Leg variants for walk cycle (rows 14 & 15). Index 3 is the kick pose, which
+// the walk cycle never selects — see Chibi.kick().
 const LEGS = [
     ['...pp....pp...', '...bb....bb...'], // 0 idle / stand
     ['....pp..pp....', '....bb..bb....'], // 1 mid stride
     ['..pp......pp..', '..bb......bb..'], // 2 wide stride
+    ['..pp......pp..', '.bb........bb.'], // 3 kick — braced wide on both feet
 ];
 
 const LEGS_SIDE = [
     ['...pp..pp.....', '...bb..bb.....'],
     ['....pppp......', '....bbbb......'],
     ['..pp....pp....', '..bb....bb....'],
+    // 3 kick — near leg swung right through, far leg planted.
+    //
+    // Two things make this read at 32px. The boot leaves the turf line (nothing
+    // on row 15 under it) so the outline pass draws air beneath it, and it is
+    // pushed all the way clear of the torso: boots are near-black, the same
+    // family as the outline and most hair, so a raised foot tucked under the body
+    // just thickens the dark mass at the bottom of the sprite and reads as
+    // nothing at all.
+    ['bbpp...pp.....', '.......bb.....'],
 ];
 
 const OUTLINE = 0x24242c;
@@ -454,6 +465,7 @@ export class Chibi {
 
         this.frame = 0;
         this.walking = false;
+        this.kicking = false;
         this._t = 0;
     }
 
@@ -483,13 +495,16 @@ export class Chibi {
 
     setWalking(on) {
         this.walking = on;
+        // The scene calls this every frame, so a kick has to survive it —
+        // otherwise the pose is overwritten before it can be seen.
+        if (this.kicking) return this;
         if (!on) { this.frame = 0; this._apply(); }
         return this;
     }
 
     /** Call from the scene's update loop. */
     tick(delta) {
-        if (!this.walking) return;
+        if (this.kicking || !this.walking) return;
         this._t += delta;
         if (this._t >= 130) {
             this._t = 0;
@@ -500,7 +515,7 @@ export class Chibi {
 
     _apply() {
         const seq = [0, 1, 0, 2];
-        const f = this.walking ? seq[this.frame] : 0;
+        const f = this.kicking ? 3 : (this.walking ? seq[this.frame] : 0);
         const key = chibiTexture(this.scene, { ...this.look, facing: this.facing, frame: f });
         this.sprite.setTexture(key);
     }
@@ -524,6 +539,55 @@ export class Chibi {
             yoyo: true,
             repeat: times - 1,
             ease: 'Quad.easeOut',
+        });
+        return this;
+    }
+
+    /**
+     * Strike the ball: swing the extended-leg pose and lean into the contact.
+     *
+     * The lean matters as much as the leg. At 34px a single frame change is easy
+     * to miss, but the whole body tipping over its planted foot is not — the
+     * sprite's origin is already at the feet, so rotating it pivots in the right
+     * place with no extra maths.
+     *
+     * `dirX` is the direction of the strike; positive is to the right.
+     */
+    kick(scene, dirX = 1, ms = 200) {
+        if (!this.sprite || !this.sprite.active) return this;
+
+        // Face along the strike so the swinging boot points at the ball
+        if (dirX) this.setFacing('side', dirX > 0);
+
+        this.kicking = true;
+        this._apply();
+
+        const lean = dirX >= 0 ? 13 : -13;
+        // Killing the sprite's tweens can abandon a hop() part-way, which would
+        // leave the character hanging above their own feet, so y is reset too.
+        scene.tweens.killTweensOf(this.sprite);
+        this.sprite.setAngle(0);
+        this.sprite.y = 0;
+        scene.tweens.add({
+            targets: this.sprite,
+            angle: lean,
+            duration: 80,
+            yoyo: true,
+            hold: 40,
+            ease: 'Quad.easeOut',
+            onComplete: () => {
+                if (!this.sprite || !this.sprite.active) return;
+                this.sprite.setAngle(0);
+                this.sprite.y = 0;
+            },
+        });
+
+        // Recover through the scene clock so it follows the match speed control
+        scene.time.delayedCall(ms, () => {
+            if (!this.sprite || !this.sprite.active) return;
+            this.kicking = false;
+            this.frame = 0;
+            this._apply();
         });
         return this;
     }
