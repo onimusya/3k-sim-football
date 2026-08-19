@@ -1,3 +1,5 @@
+import { SaveGame } from '../engine/SaveGame.js';
+
 // Boot Scene - Generate all game textures procedurally
 export class BootScene extends Phaser.Scene {
     constructor() {
@@ -59,6 +61,11 @@ export class BootScene extends Phaser.Scene {
             lastEvent: null,
             lastMatchWon: false,
         });
+
+        // Layer any saved campaign over those defaults. Fields introduced after
+        // the save was written keep the default above rather than coming back
+        // undefined. The menu decides whether to actually resume it.
+        this.registry.set('hasSavedGame', SaveGame.hasSave());
 
         this.scene.start('MainMenuScene');
     }

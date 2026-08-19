@@ -25,6 +25,7 @@ You pick one of six kingdoms (Wei, Shu, Wu, Dong Zhuo's coalition, Yuan Shao's a
 | **Season** | 10-week round-robin. Top 2 qualify for the Three Kingdoms Cup. End-of-season trophies, gold rewards, stat decay (aging). |
 | **Events** | 10 between-match events: injuries, rival poaching, sponsor offers, training breakthroughs, morale crises, challenge matches. Several require a decision with real consequences. |
 | **Audio** | Procedural via the Web Audio API — goal fanfare, crowd roar, whistles, war drums, UI clicks. No audio files. |
+| **Saving** | Autosaves to `localStorage` as you play — squad, gold, season, results, facilities, trophies. Close the tab and the menu greets you with a *Welcome Back* card; *New Game* asks before it deletes anything. |
 
 ### Art layer
 
@@ -71,6 +72,7 @@ src/
   engine/
     MatchEngine.js  Formation-aware, trait-activated simulation
     GameState.js    Season progression, economy, random events
+    SaveGame.js     localStorage persistence + debounced autosave
     AudioManager.js Procedural sounds via Web Audio API
   scenes/
     BootScene.js

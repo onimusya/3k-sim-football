@@ -9,6 +9,7 @@ import { PixelText } from '../art/PixelFont.js';
 import { Chibi, lookForPlayer, chibiPortrait } from '../art/Chibi.js';
 import * as UI from '../art/UI.js';
 import { IsoPitch } from '../art/IsoWorld.js';
+import { SaveGame } from '../engine/SaveGame.js';
 
 // Depth bands. The pitch owns 0..9000 (sky 0 → near hoarding 9000).
 const D = {
@@ -72,6 +73,159 @@ export class MainMenuScene extends Phaser.Scene {
         this.createFooter(width, height);
 
         this.playIntro();
+
+        // If there's a campaign on disk, offer to resume it before anything else.
+        const summary = SaveGame.summary();
+        if (summary) this.showResumePanel(width, height, summary);
+    }
+
+    // ─────────────────────────────────────────────
+    // RESUME A SAVED CAMPAIGN
+    // ─────────────────────────────────────────────
+    showResumePanel(width, height, s) {
+        const kingdom = KINGDOMS[String(s.kingdom).toUpperCase()];
+        if (!kingdom) return;
+        const kit = kitFor(kingdom.id);
+
+        this.locked = true;   // don't let a stray card click start a new game
+
+        const layer = this.add.container(0, 0).setDepth(D.flash + 100);
+
+        const dim = this.add.rectangle(width / 2, height / 2, width, height, 0x0d1f2a, 0.55)
+            .setInteractive();
+        layer.add(dim);
+
+        const pw = 440, ph = 300;
+        const px = (width - pw) / 2, py = (height - ph) / 2;
+        const panel = UI.panel(this, px, py, pw, ph, 'Welcome Back');
+        layer.add(panel);
+
+        // Who you were playing as
+        panel.add(chibiPortrait(this, 70, 84, lookForPlayer({ name: kingdom.fullName }, kit), 62));
+        panel.add(UI.label(this, 118, 64, kingdom.fullName, {
+            size: 18, bold: true, color: '#123a6b',
+        }));
+        panel.add(UI.label(this, 118, 88, `"${kingdom.motto}"`, {
+            size: 11, color: '#5a6a72',
+        }));
+
+        // Campaign digest — numbers as pixel text, as everywhere else
+        UI.subPanel(this, panel, 18, 122, pw - 36, 84, {
+            color: C.subPanel, edge: C.subPanelEdge,
+        });
+        const stat = (col, label, value, preset = 'gold') => {
+            panel.add(UI.label(this, col, 132, label, {
+                size: 10, bold: true, color: '#4a5a50', ox: 0.5,
+            }));
+            const pt = new PixelText(this, 0, 0, value, { scale: 3, preset });
+            pt.setOrigin(0.5, 0);
+            pt.addTo(panel, col, 150);
+        };
+        stat(74, 'SEASON', s.season);
+        stat(166, 'WEEK', s.week);
+        stat(262, 'GOLD', s.gold);
+        stat(360, 'CUPS', s.trophies, s.trophies > 0 ? 'gold' : 'dark');
+
+        panel.add(UI.label(this, pw / 2, 182, `Squad of ${s.squadSize} warriors`, {
+            size: 11, color: '#4a5a50', ox: 0.5,
+        }));
+
+        // Continue
+        const cont = UI.button(this, 18, 222, 194, 44, 'Continue', {
+            color: C.hudGreen, colorDark: C.hudGreenDark, size: 17,
+        });
+        cont.onClick(() => this.resumeSavedGame(layer));
+        panel.add(cont);
+
+        // New game — destructive, so it asks first
+        const fresh = UI.button(this, pw - 212, 222, 194, 44, 'New Game', {
+            color: 0x8a93a4, colorDark: 0x5f6878, size: 17,
+        });
+        fresh.onClick(() => this.confirmNewGame(layer, width, height));
+        panel.add(fresh);
+
+        layer.setAlpha(0);
+        this.tweens.add({ targets: layer, alpha: 1, duration: 300, delay: 260 });
+        this.resumeLayer = layer;
+    }
+
+    resumeSavedGame(layer) {
+        if (!SaveGame.applyTo(this.registry)) {
+            // Save vanished or failed validation between menu build and click
+            this.dismissResume(layer);
+            return;
+        }
+        import('../engine/AudioManager.js').then(({ audioManager }) => {
+            audioManager.init();
+            audioManager.playWarDrum();
+        });
+        const st = this.registry.get('gameState');
+        const kit = kitFor(st.playerKingdom);
+        this.cameras.main.flash(360,
+            (kit.jersey >> 16) & 0xff, (kit.jersey >> 8) & 0xff, kit.jersey & 0xff);
+        this.time.delayedCall(420, () => this.scene.start('TeamManagementScene'));
+    }
+
+    /** Starting over wipes the save, so make the player confirm it. */
+    confirmNewGame(layer, width, height) {
+        const ask = this.add.container(0, 0).setDepth(D.flash + 200);
+        const dim = this.add.rectangle(width / 2, height / 2, width, height, 0x0d1f2a, 0.5)
+            .setInteractive();
+        ask.add(dim);
+
+        // Both panels are centred, so leaving the resume panel at full opacity
+        // makes this one look like a rendering glitch nested inside it. Push the
+        // parent back while the question is on screen.
+        this.tweens.add({ targets: layer, alpha: 0.12, duration: 180 });
+
+        const pw = 380, ph = 190;
+        const panel = UI.panel(this, (width - pw) / 2, (height - ph) / 2, pw, ph, 'Start Over?');
+        ask.add(panel);
+
+        panel.add(UI.label(this, pw / 2, 54, 'This deletes your saved campaign.', {
+            size: 13, bold: true, color: '#a3341c', ox: 0.5,
+        }));
+        panel.add(UI.label(this, pw / 2, 76, 'Season progress, squad and trophies\nwill be lost for good.', {
+            size: 11, color: '#4a4a55', ox: 0.5, align: 'center',
+        }));
+
+        const yes = UI.button(this, 20, 122, 160, 42, 'Delete & Start', {
+            color: C.bad, colorDark: 0xa8281c, size: 15,
+        });
+        yes.onClick(() => {
+            SaveGame.clear();
+            this.registry.set('hasSavedGame', false);
+            ask.destroy();
+            this.dismissResume(layer);
+        });
+        panel.add(yes);
+
+        const no = UI.button(this, pw - 180, 122, 160, 42, 'Keep Save', {
+            color: C.titleBarTop, colorDark: C.titleBarBot, size: 15,
+        });
+        no.onClick(() => {
+            ask.destroy();
+            if (layer.active) this.tweens.add({ targets: layer, alpha: 1, duration: 180 });
+        });
+        panel.add(no);
+
+        ask.setAlpha(0);
+        this.tweens.add({ targets: ask, alpha: 1, duration: 180 });
+    }
+
+    dismissResume(layer) {
+        // confirmNewGame may still be fading this layer back; that tween would
+        // fight the fade-out and leave the panel half visible.
+        this.tweens.killTweensOf(layer);
+        this.tweens.add({
+            targets: layer,
+            alpha: 0,
+            duration: 220,
+            onComplete: () => {
+                layer.destroy();
+                this.locked = false;   // kingdom cards become live again
+            },
+        });
     }
 
     // ─────────────────────────────────────────────
@@ -533,7 +687,29 @@ export class MainMenuScene extends Phaser.Scene {
         this.locked = true;
 
         const gameState = this.registry.get('gameState');
+
+        // Picking a kingdom starts a fresh campaign. Wipe anything a previously
+        // resumed save left in the registry, otherwise the new game inherits the
+        // old squad, gold and season.
         gameState.playerKingdom = kingdom.id;
+        gameState.players = null;          // TeamManagementScene regenerates it
+        gameState.formation = kingdom.formation;
+        gameState.season = 1;
+        gameState.week = 1;
+        gameState.money = 1500;
+        gameState.gold = 1500;
+        gameState.reputation = 50;
+        gameState.results = [];
+        gameState.matchesThisSeason = 0;
+        gameState.seasonComplete = false;
+        gameState.initialized = false;
+        gameState.facilities = { trainingGround: 1, medicalTent: 0, scoutNetwork: 0 };
+        gameState.trophies = [];
+        gameState.sponsorBonus = 0;
+        gameState.scoutBonus = false;
+        gameState.weatherPenalty = null;
+        gameState.challengeMatch = false;
+        gameState.lastMatchWon = false;
         this.registry.set('gameState', gameState);
 
         // Audio: war drum on selection

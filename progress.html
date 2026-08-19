@@ -196,7 +196,27 @@
     <div class="body">
       <ul class="log">
         <li>
-          <div class="v">v0.6 — Character identity &amp; crowd (current)</div>
+          <div class="v">v0.8 — Progress persists (current)</div>
+          <ul>
+            <li>The campaign lived only in Phaser's in-memory registry, so a refresh threw away the squad, gold, season and trophies. <code>SaveGame.js</code> now mirrors it to <code>localStorage</code></li>
+            <li>Autosave hangs off the registry's <code>changedata-gameState</code> event with a 400 ms debounce, so every existing and future write site is covered without touching it — plus a <code>pagehide</code> flush for tabs closed inside the debounce window</li>
+            <li>Only a whitelist of fields is written, so per-scene scratch data never leaks into the save; unavailable storage, quota errors, corrupt JSON and version mismatches all degrade instead of crashing</li>
+            <li>The menu opens on a <em>Welcome Back</em> card showing kingdom, season, week, gold, cups and squad size — <em>Continue</em> or <em>New Game</em>, the latter behind a confirm because it deletes the save</li>
+            <li>Verified with real mouse clicks in a browser: a marked campaign (gold 1234, week 4, season 2, two results, a bumped player stat) round-tripped field for field; a played match persisted Shu 0–0 Yuan with week 3 / gold 1515; New Game left no trace of the old kingdom</li>
+          </ul>
+        </li>
+        <li>
+          <div class="v">v0.7 — The match became a match</div>
+          <ul>
+            <li>Players used to jitter inside their formation slots. <code>MatchDayScene</code> now runs a per-frame possession model over the engine result: possession, carrier, phase, passes, interceptions, pressing and set-piece restarts</li>
+            <li>The whole shape slides with the ball, scaled per player so it stretches rather than translating rigidly; the engine still owns the scoreline</li>
+            <li>Measured before/after: ball travel 0.06 → 1.02 of the pitch, 13 possession changes, 8 distinct carriers, average outfielder covering 0.33 of the pitch instead of 0.09</li>
+            <li>Two traps found the hard way: loose-ball pickup running during a pass instantly recollected the ball, and name tags anchored once left floating on empty grass once players actually moved</li>
+            <li>Shipped live on Vercel; <code>/src/**</code> forced to revalidate after a deploy served correct code while browsers kept executing the previous build from cache</li>
+          </ul>
+        </li>
+        <li>
+          <div class="v">v0.6 — Character identity &amp; crowd</div>
           <ul>
             <li>Silhouette features added to the chibi generator: tapering beards, plumed helmets with widened brims, spiked coronets, heavy builds — applied per named warrior, so Guan Yu, Lü Bu, Zhang Fei and Cao Cao are recognisable at 34px</li>
             <li>Crowd rebuilt from 2×3px blobs into outlined 7×9 people with head, hair, shoulders and arms, plus scattered empty seats so attendance reads</li>

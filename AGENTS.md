@@ -81,6 +81,53 @@ ball fx range roughly 0.05–1.0, 8+ distinct carriers, 10+ possession changes,
 average outfielder covering ~0.33 of the pitch length, and at most a couple of
 momentary sprite overlaps.
 
+## Persistence
+
+`src/engine/SaveGame.js` owns the save. One slot in `localStorage` under
+`threeKingdomsSoccer.save.v1`, roughly 2 KB of JSON.
+
+The hook is deliberately indirect. `SaveGame.attachAutosave(game)` (called once in
+`main.js`) listens for the registry's `changedata-gameState` event and writes on a
+400 ms debounce, with a `pagehide` listener to flush a close that lands inside the
+debounce window. **Do not add manual `SaveGame.save()` calls at mutation sites.**
+Every scene already ends its state changes with `this.registry.set('gameState', …)`,
+so the event covers all present and future write sites; hand-placed calls would
+drift out of date the moment someone adds a new one.
+
+`PERSISTED` is a whitelist of field names. Anything not on that list is treated as
+derived or per-scene scratch and is not written. If you add a campaign-level field
+to `gameState`, add it to `PERSISTED` or it will silently fail to survive a
+refresh. `applyTo()` merges the save *over* the registry defaults rather than
+replacing the object, so fields added in later builds keep their defaults instead
+of coming back `undefined`.
+
+Failure modes are all non-fatal by design: `localStorage` throwing outright
+(private browsing), `QuotaExceededError` on write, unparseable JSON, a
+`__version` mismatch, or a save whose `players` array is missing or malformed.
+Each of those logs a warning and either discards the save or skips the write. The
+version check discards rather than migrates — there are no old saves in the wild
+yet, so a migration path would be speculative code.
+
+`BootScene` sets `hasSavedGame` in the registry; `MainMenuScene.showResumePanel`
+turns a valid save into the *Welcome Back* card and sets `this.locked = true` so a
+stray kingdom-card click cannot start a new campaign underneath the overlay.
+
+Two things that are easy to break:
+
+1. **`selectKingdom` must reset every campaign field explicitly.** Resuming a save
+   loads a squad, gold and season into the registry; if the player then backs out
+   to the menu and starts a new game, anything not reset is inherited by the new
+   campaign. This is why that method reads as a long list of assignments.
+2. **`confirmNewGame` and `dismissResume` tween the same layer.** `dismissResume`
+   calls `killTweensOf` first, otherwise the fade-back-in from *Keep Save* fights
+   the fade-out and leaves the panel stuck half visible.
+
+Testing this in a browser needs `page.bringToFront()` before anything else. A
+backgrounded headless page throttles `requestAnimationFrame` to ~1 fps, which
+stalls Phaser's clock — `delayedCall` and `scene.start` appear to hang, and every
+`waitForFunction` on scene state times out for reasons that have nothing to do
+with the code under test. This cost two debugging cycles.
+
 ## Known issues and next steps
 
 1. **Match moments still lack impact.** Possession, runs, passing and pressing now

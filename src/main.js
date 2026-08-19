@@ -4,6 +4,7 @@ import { TeamManagementScene } from './scenes/TeamManagementScene.js';
 import { MatchDayScene } from './scenes/MatchDayScene.js';
 import { LeagueScene } from './scenes/LeagueScene.js';
 import { MatchResultScene } from './scenes/MatchResultScene.js';
+import { SaveGame } from './engine/SaveGame.js';
 
 // The design resolution. Scale.FIT letterboxes this into whatever the window
 // is, preserving aspect, and autoCenter keeps it centred on both axes.
@@ -34,6 +35,11 @@ const config = {
 };
 
 const game = new Phaser.Game(config);
+
+// Persist the campaign whenever gameState changes. Hooking the registry once
+// here means every current and future scene is covered without each of them
+// having to remember to save.
+SaveGame.attachAutosave(game);
 
 /*
  * Keep the canvas fitted and centred whenever its container changes size.
