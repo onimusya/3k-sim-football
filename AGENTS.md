@@ -164,6 +164,62 @@ kick happens: it squashes the ball along its travel, throws a white star, scuffs
 turf, adds spin, and swings the kicker's leg. Call it immediately *before*
 `moveBall()` so the swing and the ball leaving land on the same frame.
 
+### Never assign `ballState` directly
+
+Every way the ball can move goes through one of four methods. Assigning
+`ballState.fx/fy` by hand is how the motion got jerky in the first place, and
+`tools/measure-ball-motion.mjs` exists to catch it happening again.
+
+| Use | When |
+|-----|------|
+| `moveBall(fx, fy, opts)` | The ball travels. `opts.follow` returns the target's live position |
+| `gatherBall(carrier)` | Bring the ball to a new carrier's feet. Called by `setPossession` |
+| `placeBallAt(fx, fy)` | The referee placed it: restarts, kickoffs. Fades through anything far |
+| the chase in `updatePlay` | Keeps the ball at a moving carrier's feet, and only that |
+
+The measured before/after over 20 seconds of play: 14 jerks and an 861px
+single-frame move, down to 0–2 jerks and nothing above ~50px. Each fix and why:
+
+1. **Passes flew at a fixed point.** The aim was the receiver's position at the
+   moment of the strike, but receivers keep running — `receiverDriftDuringPass`
+   is typically 0.15 field units. The ball landed behind him, hung for a frame,
+   then teleported onto his feet when possession changed: a 53–77px jump on
+   *every pass*. Hence `opts.follow`, blended in with t² so an early frame cannot
+   yank the ball sideways.
+2. **Passes aimed at the receiver's centre**, not the carry point the chase uses,
+   leaving a further ~20px correction at handover.
+3. **`Quad.easeOut` on a pass** decays to almost nothing, so the ball crawled the
+   last few pixels while the receiver ran on. `Sine.easeOut` holds more speed
+   through the arrival.
+4. **Shots teleported the ball to the shooter.** The engine names the scorer, so
+   he has to be staged near the box, and the ball was moved with him — usually
+   from midfield, so 400px+ in one frame. `shootFromActor` now plays it to him as
+   a through ball and `releaseShot` strikes when it arrives.
+5. **Restarts and kickoffs repositioned instantly**, up to 861px. `placeBallAt`
+   fades the ball out, moves it, fades it in. A jump nobody sees is not a jump.
+6. **Handovers relied on the per-frame chase**, whose exponential approach
+   front-loads its motion: the first frame after possession changed moved up to
+   68px on its own. `gatherBall` gives it an explicit duration instead, so the
+   motion has the same shape whatever the gap.
+7. **The chase fought the tweens.** The dribble branch needed `!p.inFlight`,
+   otherwise it wrote the same fields on the same frames as `gatherBall`.
+8. **`kickoff` had a 40ms hole.** The freeze runs 420ms, the phase flips at
+   460ms, and in between the chase dragged the ball off the centre spot — 171px.
+   `kickoff` is now in the list of phases the chase leaves alone.
+9. **Interrupting an arcing ball dropped it out of the sky.** A new `moveBall`
+   restarted the arc from zero, losing up to 29px of altitude in one frame.
+   `carriedAir` bleeds the old height out over the first third of the new move.
+10. **`forceAttack` nudged the carrier after handing over possession**, so the
+    ball was played to where he had been and the chase covered the 0.10 gap. The
+    nudge happens first now.
+11. **Shots used `Quad.easeIn`**, which accelerates *into* the target — backwards
+    for a struck ball, and it made the frames around the goal line the fastest in
+    the whole shot.
+
+One trap in `moveBall`: it clears `this.ballTween` before calling `onDone`,
+because `onDone` usually leads to `setPossession` → `gatherBall` → `moveBall`, and
+that nested call must not try to stop the tween it is being called from.
+
 Depths are deliberately inconsistent and it is not a bug. The ball's shadow is a
 decal at `D.ballDecal` (950), below every player, so a player standing over the
 ball hides it. The findability ring is at `D.ballMarker` (7996) — above players,
@@ -233,6 +289,31 @@ When verifying a deploy, check what the page *executed*, not what the server
 sends. `window.game.registry.events.listenerCount('changedata-gameState')`
 should be `1`; `0` means an old `main.js` is running.
 
+## Tools
+
+`tools/` holds two throwaway-but-kept harnesses. They borrow whatever Playwright
+is already on the machine (see `tools/playwright.mjs`), since the project has no
+dependencies of its own.
+
+```
+node tools/measure-ball-motion.mjs     # ball motion regression check
+node tools/verify-match.mjs            # two full matches + screenshots
+```
+
+Both run **headed on purpose**. Headless Chrome throttles
+`requestAnimationFrame` to roughly 14fps, which stalls Phaser's clock: timers and
+`scene.start` appear to hang and every wait on scene state times out for reasons
+that have nothing to do with the code under test. Through a browser-automation
+tool that keeps a real window, `page.bringToFront()` achieves the same thing. This
+cost two debugging cycles before it was understood.
+
+The lesson `measure-ball-motion.mjs` encodes: **measure behaviour, not bytes, and
+attribute rather than guess.** It normalises speed per millisecond so a long frame
+is not mistaken for a teleport, ignores moves made while the ball is faded out,
+and records which ball-moving method ran just before each jump. Every one of the
+eleven fixes listed above was found that way; none of them were visible by reading
+the code.
+
 ## Resuming work
 
 1. Run `npx serve . -l 3000` from the project root
@@ -240,9 +321,11 @@ should be `1`; `0` means an old `main.js` is running.
 3. Open the browser console and use `window.game` to drive scenes programmatically
 4. `artlab.html` renders the character silhouette showcase for visual QA
 5. `progress.html` has the live game embedded plus the evaluation history
+6. `node tools/verify-match.mjs` after any match-day change
 
 When making changes:
 - Read the scene you're changing first — they are 800–1400 lines each
 - The art API cheatsheet at the top of this file (in each builder prompt) is the contract; if you change `UI.panel`'s return shape, update every scene
-- Run two full match cycles after any change to confirm the scene-restart path doesn't crash (stale GameObject references are the #1 recurring bug)
+- Run two full match cycles after any change to confirm the scene-restart path doesn't crash (stale GameObject references are the #1 recurring bug). `node tools/verify-match.mjs` does exactly this
+- Anything that tweens a chibi's `angle` or `y` must restore it independently of the tween's `onComplete`. `killTweensOf` does not run `onComplete`, so `kick()` and `hop()` interrupting each other left players permanently tilted or hovering. It was intermittent, which is why `verify-match.mjs` checks for it
 - Take a screenshot and compare to `.shots/` before declaring a visual change done

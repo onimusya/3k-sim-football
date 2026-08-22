@@ -524,6 +524,46 @@ export class MatchDayScene extends Phaser.Scene {
         p.phase = 'build';
         p.passCooldown = 500 + Math.random() * 500;
         if (p.carrier) this.setFocus(p.carrier);
+        this.gatherBall(p.carrier);
+    }
+
+    /**
+     * Bring the ball to a new carrier's feet over a short eased move.
+     *
+     * updatePlay() chases the ball onto the carrier every frame, which is right
+     * for tracking someone already in possession but wrong for a handover: an
+     * exponential approach front-loads its motion, so the first frame after
+     * possession changed moved up to 68px on its own and read as a snap. Pickups
+     * fire at a weighted distance, so that gap can be most of a stride and a bit.
+     *
+     * Giving it an explicit duration makes the motion the same shape every time
+     * regardless of the gap. Tiny gaps glide in 60ms and are imperceptible;
+     * a real gap gets a short pass, which is what it is.
+     */
+    gatherBall(carrier) {
+        if (!carrier || !carrier.chibi || !carrier.chibi.container.active) return;
+        if (!this.ball || !this.ball.active) return;
+
+        const b = this.ballState;
+        const dir = this.attackDirFor(carrier.team);
+        const aimAt = () => ({
+            fx: Phaser.Math.Clamp(carrier.fx + dir * 0.022, 0.01, 0.99),
+            fy: Phaser.Math.Clamp(carrier.fy, 0.04, 0.96),
+        });
+
+        const to = aimAt();
+        const range = Math.hypot(to.fx - b.fx, (to.fy - b.fy) * 0.45);
+        if (range < 0.004) return;               // already there
+
+        const p = this.play;
+        p.inFlight = true;                       // keeps updatePlay off the ball
+        this.moveBall(to.fx, to.fy, {
+            duration: Phaser.Math.Clamp(60 + range * 900, 60, 300),
+            air: range > 0.06 ? 8 : 0,
+            ease: 'Sine.easeInOut',
+            follow: aimAt,
+            onDone: () => { if (this.play) this.play.inFlight = false; },
+        });
     }
 
     /** Whoever is closest to the ball on that team, ignoring the keeper. */
@@ -547,10 +587,7 @@ export class MatchDayScene extends Phaser.Scene {
             a.job = a.role === 'GK' ? 'keeper' : 'hold';
             this.placeActor(a);
         });
-        this.ballState.fx = 0.5;
-        this.ballState.fy = 0.5;
-        this.ballState.air = 0;
-        this.placeBall();
+        this.placeBallAt(0.5, 0.5);
 
         p.phase = 'kickoff';
         p.possession = team;
@@ -560,7 +597,11 @@ export class MatchDayScene extends Phaser.Scene {
         p.carrier = this.pickBuildUpPlayer(team);
         if (p.carrier) this.setFocus(p.carrier);
         this.time.delayedCall(460, () => {
-            if (this.matchStarted && this.play.phase === 'kickoff') this.play.phase = 'build';
+            if (!this.matchStarted || this.play.phase !== 'kickoff') return;
+            this.play.phase = 'build';
+            // Tap-off: play the ball off the spot rather than letting the
+            // per-frame chase yank it onto whoever is nearest.
+            this.gatherBall(this.play.carrier);
         });
     }
 
@@ -569,14 +610,16 @@ export class MatchDayScene extends Phaser.Scene {
         const dir = this.attackDirFor(team);
         const carrier = carrierActor || this.pickBuildUpPlayer(team);
         if (!carrier) return null;
-        // Move the ball to that player so the run-up reads as continuous play
-        this.ballState.fx = carrier.fx;
-        this.ballState.fy = carrier.fy;
-        this.placeBall();
+
+        // Nudge the carrier into the final third first, so the ball is played to
+        // where he ends up. Doing this after setPossession aimed the ball at his
+        // old spot, and the per-frame chase then had to cover the 0.10 gap on its
+        // own — a 23px first frame.
+        carrier.fx = Phaser.Math.Clamp(carrier.fx + dir * 0.10, 0.06, 0.94);
+
+        // The ball is not assigned; setPossession plays it over to him.
         this.setPossession(team, carrier);
         this.play.phase = 'attack';
-        // Nudge the carrier into the final third so the attack has somewhere to go
-        carrier.fx = Phaser.Math.Clamp(carrier.fx + dir * 0.10, 0.06, 0.94);
         return carrier;
     }
 
@@ -785,18 +828,38 @@ export class MatchDayScene extends Phaser.Scene {
             p.frozen -= delta;
             return;
         }
-        // Shots and celebrations own the ball; don't fight the tween.
-        if (p.phase === 'shot' || p.phase === 'celebrate' || p.phase === 'setpiece') return;
+        // Phases where something else owns the ball; don't fight it.
+        //
+        // 'kickoff' is in here for a narrow reason: the freeze runs 420ms and the
+        // phase flips to 'build' at 460ms, so without it the chase below got a
+        // ~40ms window in which to drag the ball off the centre spot onto the
+        // nearest player. That measured as a 171px jump. The tap-off is done
+        // properly by the gatherBall() call that flips the phase.
+        if (p.phase === 'shot' || p.phase === 'celebrate'
+            || p.phase === 'setpiece' || p.phase === 'kickoff') return;
 
         const carrier = p.carrier;
         const carrierLive = carrier && carrier.chibi && carrier.chibi.container.active;
 
-        if (!p.ballLoose && carrierLive) {
-            // Ball sits just in front of the carrier's feet with a dribble bob
+        // `!p.inFlight` matters: gatherBall() owns the ball while it travels to a
+        // new carrier, and without this the per-frame chase below writes the same
+        // fields on the same frames and fights the tween.
+        if (!p.ballLoose && !p.inFlight && carrierLive) {
+            // Ball sits just in front of the carrier's feet with a dribble bob.
+            //
+            // Chased rather than assigned. Assigning teleported the ball whenever
+            // possession changed over a gap — a loose-ball pickup triggers within
+            // 0.05 field units, so that was a jump of up to ~45px in one frame.
+            // The time constant is short enough (25ms) that the ball still looks
+            // glued to a running player: steady-state lag is about one stride,
+            // roughly 6px, while a handover closes in three or four frames.
             const dir = this.attackDirFor(carrier.team);
             const bob = Math.sin(this.time.now / 90) * 0.004;
-            this.ballState.fx = Phaser.Math.Clamp(carrier.fx + dir * 0.022, 0.01, 0.99);
-            this.ballState.fy = Phaser.Math.Clamp(carrier.fy + bob, 0.04, 0.96);
+            const tFx = Phaser.Math.Clamp(carrier.fx + dir * 0.022, 0.01, 0.99);
+            const tFy = Phaser.Math.Clamp(carrier.fy + bob, 0.04, 0.96);
+            const k = 1 - Math.exp(-Math.max(1, delta) / 25);
+            this.ballState.fx += (tFx - this.ballState.fx) * k;
+            this.ballState.fy += (tFy - this.ballState.fy) * k;
             this.ballState.air = 0;
             this.placeBall();
 
@@ -909,8 +972,18 @@ export class MatchDayScene extends Phaser.Scene {
         receiver.job = 'support';
         this.setFocus(receiver);
 
-        const tx = Phaser.Math.Clamp(receiver.fx + (Math.random() - 0.5) * 0.02, 0.03, 0.97);
-        const ty = Phaser.Math.Clamp(receiver.fy + (Math.random() - 0.5) * 0.02, 0.06, 0.94);
+        // Aim at the point the ball will sit once he has it — the same offset
+        // updatePlay() uses to keep the ball at a carrier's feet. Landing on his
+        // centre instead leaves a ~20px correction the moment possession changes.
+        const carryOffset = this.attackDirFor(receiver.team) * 0.022;
+        const wobble = (Math.random() - 0.5) * 0.02;
+        const aimAt = () => ({
+            fx: Phaser.Math.Clamp(receiver.fx + carryOffset, 0.03, 0.97),
+            fy: Phaser.Math.Clamp(receiver.fy + wobble, 0.06, 0.94),
+        });
+
+        const first = aimAt();
+        const tx = first.fx, ty = first.fy;
 
         // Kick before the tween starts, so the swing and the ball leaving happen
         // on the same frame. Longer balls get struck harder.
@@ -920,12 +993,20 @@ export class MatchDayScene extends Phaser.Scene {
         this.moveBall(tx, ty, {
             duration: opts.duration ?? 420,
             air: opts.air ?? 16,
-            ease: 'Quad.easeOut',
-            onDone: () => {
+            // Quad.easeOut decays to almost nothing, so the ball used to crawl
+            // the last few pixels while the receiver ran on. Sine holds more
+            // speed through the arrival.
+            ease: 'Sine.easeOut',
+            // Track the receiver so the ball arrives at his feet rather than
+            // where he was standing when it was struck.
+            follow: () => (receiver.chibi && receiver.chibi.container.active ? aimAt() : null),
+            onDone: (landedFx, landedFy) => {
                 this.play.inFlight = false;
                 if (!this.matchStarted) return;
-                // Interception check — a defender sitting on the landing spot
-                const thief = this.interceptorAt(tx, ty, from ? from.team : receiver.team);
+                // Interception check — a defender sitting on the actual landing
+                // spot, which tracking may have moved from the original aim
+                const thief = this.interceptorAt(landedFx, landedFy,
+                    from ? from.team : receiver.team);
                 if (thief && Math.random() < (opts.intercept ?? 0.12)) {
                     this.setPossession(thief.team, thief);
                     this.typewriterCommentIfIdle(`${thief.player.name} reads it and intercepts!`);
@@ -953,8 +1034,15 @@ export class MatchDayScene extends Phaser.Scene {
     }
 
     /**
-     * Drive a scripted shot from a specific player: bring him onto the ball near
+     * Drive a scripted shot from a specific player: play the ball up to him near
      * the box, then strike. `outcome` decides what happens after the strike.
+     *
+     * The engine names the scorer, so he has to be moved into a shooting
+     * position. That part is an unavoidable cut. The *ball* used to be moved with
+     * him, and since it was usually in midfield, that was a 400px+ teleport in a
+     * single frame — measurably the worst discontinuity in the whole match. It is
+     * now played to him as a through ball instead, which is both smooth and
+     * better drama: goals arrive from a pass rather than materialising.
      */
     shootFromActor(shooter, outcome, onDone) {
         const p = this.play;
@@ -962,22 +1050,65 @@ export class MatchDayScene extends Phaser.Scene {
         const dir = this.attackDirFor(team);
         const goalFx = this.targetGoalFx(team);
 
-        if (shooter) {
-            // Place the shooter in a plausible shooting position and give him the ball
-            shooter.fx = Phaser.Math.Clamp(goalFx - dir * (0.10 + Math.random() * 0.07), 0.05, 0.95);
-            shooter.fy = Phaser.Math.Clamp(0.5 + (Math.random() - 0.5) * 0.26, 0.2, 0.8);
-            this.placeActor(shooter);
-            this.ballState.fx = shooter.fx + dir * 0.02;
-            this.ballState.fy = shooter.fy;
-            this.placeBall();
-            this.setFocus(shooter);
-            shooter.chibi.faceVector(dir, 0);
-        }
-
-        p.phase = 'shot';
+        p.phase = 'shot';       // locks updatePlay out of the ball
         p.possession = team;
         p.carrier = null;
         p.ballLoose = false;
+        p.inFlight = true;
+
+        if (shooter) {
+            // Place the shooter in a plausible shooting position
+            shooter.fx = Phaser.Math.Clamp(goalFx - dir * (0.10 + Math.random() * 0.07), 0.05, 0.95);
+            shooter.fy = Phaser.Math.Clamp(0.5 + (Math.random() - 0.5) * 0.26, 0.2, 0.8);
+            this.placeActor(shooter);
+            this.setFocus(shooter);
+            shooter.chibi.faceVector(dir, 0);
+
+            const feedFx = shooter.fx + dir * 0.02;
+            const range = Math.hypot(feedFx - this.ballState.fx,
+                (shooter.fy - this.ballState.fy) * 0.45);
+
+            // Anything the eye can see gets played, not placed. A higher
+            // threshold here left a band where the ball was repositioned
+            // instantly and visibly — up to 54px in a single frame.
+            if (range > 0.004) {
+                // Struck by nobody in particular — whoever had it is behind the
+                // play by now — so only the ball reacts.
+                this.strike(null, feedFx, shooter.fy, Math.min(1, 0.5 + range * 1.6));
+                this.moveBall(feedFx, shooter.fy, {
+                    duration: Phaser.Math.Clamp(220 + range * 900, 220, 620),
+                    air: 12 + range * 40,
+                    ease: 'Sine.easeOut',
+                    // Actors keep steering during the 'shot' phase, so the shooter
+                    // drifts from where he was placed. Track him, or the feed
+                    // lands short and releaseShot strikes from thin air.
+                    follow: () => ({
+                        fx: Phaser.Math.Clamp(shooter.fx + dir * 0.02, 0.03, 0.97),
+                        fy: Phaser.Math.Clamp(shooter.fy, 0.06, 0.94),
+                    }),
+                    onDone: () => {
+                        if (!this.matchStarted) return;
+                        this.releaseShot(shooter, outcome, onDone);
+                    },
+                });
+                return shooter;
+            }
+
+            // Within a few pixels of his feet already — leave it alone
+        }
+
+        this.releaseShot(shooter, outcome, onDone);
+        return shooter;
+    }
+
+    /** The strike itself, split out so the feed can precede it asynchronously. */
+    releaseShot(shooter, outcome, onDone) {
+        const p = this.play;
+        const team = shooter ? shooter.team : p.possession;
+        const dir = this.attackDirFor(team);
+        const goalFx = this.targetGoalFx(team);
+
+        p.phase = 'shot';
         p.inFlight = true;
 
         // Strike
@@ -994,7 +1125,11 @@ export class MatchDayScene extends Phaser.Scene {
         this.moveBall(targetFx, targetFy, {
             duration: outcome === 'wide' ? 340 : 300,
             air: outcome === 'wide' ? 58 : 40,
-            ease: 'Quad.easeIn',
+            // A struck ball is fastest as it leaves the boot and slows from
+            // there. This was Quad.easeIn, which is the opposite: the ball
+            // accelerated into the target, so the frames around the goal line
+            // were the quickest in the whole shot and read as a lurch.
+            ease: 'Quad.easeOut',
             onDone: () => {
                 this.play.inFlight = false;
                 if (onDone) onDone();
@@ -1018,10 +1153,8 @@ export class MatchDayScene extends Phaser.Scene {
     restart(team, atFx, atFy, delay = 700) {
         this.play.phase = 'setpiece';
         this.play.inFlight = false;
-        this.ballState.fx = Phaser.Math.Clamp(atFx, 0.03, 0.97);
-        this.ballState.fy = Phaser.Math.Clamp(atFy, 0.06, 0.94);
-        this.ballState.air = 0;
-        this.placeBall();
+        this.placeBallAt(Phaser.Math.Clamp(atFx, 0.03, 0.97),
+            Phaser.Math.Clamp(atFy, 0.06, 0.94));
 
         this.time.delayedCall(delay, () => {
             if (!this.matchStarted) return;
@@ -1072,6 +1205,37 @@ export class MatchDayScene extends Phaser.Scene {
     }
 
     /**
+     * Put the ball somewhere without pretending it travelled there — restarts and
+     * kickoffs, where the referee has placed it. Anything far enough to read as a
+     * teleport is faded through instead of snapped; a foul restart on the spot is
+     * close enough to just move.
+     *
+     * Use this rather than assigning `ballState` directly. Goal kicks were
+     * crossing 860px in a single frame, which measured as the largest
+     * discontinuity in the match once passes had been fixed.
+     */
+    placeBallAt(fx, fy) {
+        const b = this.ballState;
+        const tx = Phaser.Math.Clamp(fx, 0.01, 0.99);
+        const ty = Phaser.Math.Clamp(fy, 0.04, 0.96);
+        const far = Math.hypot(tx - b.fx, (ty - b.fy) * 0.45) > 0.06;
+
+        const apply = () => {
+            b.fx = tx;
+            b.fy = ty;
+            b.air = 0;
+            this.placeBall();
+        };
+
+        if (far && this.ball && this.ball.active) {
+            this.ball.blink(apply);
+        } else {
+            apply();
+            if (this.ball) this.ball.reset();
+        }
+    }
+
+    /**
      * Everything that happens at the instant the ball leaves a foot: the striker
      * swings, the ball squashes, a white star pops and the turf scuffs.
      * Called from the pass and shot paths so it always lands on the same frame
@@ -1090,7 +1254,23 @@ export class MatchDayScene extends Phaser.Scene {
         }
     }
 
-    /** Tween the ball through field space with an optional air arc. */
+    /**
+     * Tween the ball through field space with an optional air arc.
+     *
+     * `opts.follow` is a function returning the target's *current* field
+     * position. Without it a pass flies at wherever the receiver was standing
+     * when the ball was struck, and since receivers keep running, the ball landed
+     * behind them, hung for a frame, and then teleported onto their feet when
+     * possession changed. That single-frame jump measured 53–77px and was the
+     * reason passes did not look smooth.
+     *
+     * The aim is blended onto the live position with t², so an early frame cannot
+     * yank the ball sideways; the correction is spread across the flight and
+     * arrives exactly on target.
+     *
+     * `opts.onDone` receives the resolved landing spot, which is not the spot
+     * originally requested.
+     */
     moveBall(fx, fy, opts = {}) {
         if (!this.ball || !this.ball.active) return;
         if (this.ballTween) this.ballTween.stop();
@@ -1100,21 +1280,43 @@ export class MatchDayScene extends Phaser.Scene {
         const peak = opts.air ?? 0;
         const o = { t: 0 };
 
+        // Height the ball already has. Interrupting an arcing ball — a shot
+        // released while a feed was still in the air, a pass cut short — used to
+        // restart the arc from zero, dropping the ball 27px out of the sky in one
+        // frame. Carrying the old height and bleeding it out over the new move
+        // keeps the descent continuous.
+        const carriedAir = b.air || 0;
+
+        let endFx = fx, endFy = fy;
+
         this.ballTween = this.tweens.add({
             targets: o,
             t: 1,
             duration: opts.duration ?? 700,
             ease: opts.ease || 'Sine.easeInOut',
             onUpdate: () => {
-                b.fx = from.fx + (fx - from.fx) * o.t;
-                b.fy = from.fy + (fy - from.fy) * o.t;
-                b.air = Math.sin(Math.PI * o.t) * peak;
+                if (opts.follow) {
+                    const live = opts.follow();
+                    if (live) {
+                        const w = o.t * o.t;
+                        endFx = fx + (live.fx - fx) * w;
+                        endFy = fy + (live.fy - fy) * w;
+                    }
+                }
+                b.fx = from.fx + (endFx - from.fx) * o.t;
+                b.fy = from.fy + (endFy - from.fy) * o.t;
+                b.air = Math.sin(Math.PI * o.t) * peak
+                    + carriedAir * Math.max(0, 1 - o.t * 3);
                 this.placeBall();
             },
             onComplete: () => {
                 b.air = 0;
                 this.placeBall();
-                if (opts.onDone) opts.onDone();
+                // Cleared before the callback: onDone often leads to
+                // setPossession → gatherBall → moveBall, and that nested call
+                // must not try to stop the tween it is being called from.
+                this.ballTween = null;
+                if (opts.onDone) opts.onDone(endFx, endFy);
             },
         });
     }

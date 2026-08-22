@@ -39,7 +39,7 @@ truncated icosahedron, baked into a 12-phase rotation strip so it rolls:
 - **UI** — white dialog panels with blue gradient title bars, cream list rows, coloured stat bars with dark value wells, HUD chips, position badges, chunky 3D buttons
 - **IsoWorld** — sheared-projection pitch (not 45° iso, so both goals stay on a 960×640 canvas) with mown grass, full markings, wrap-around terraces, ~330 individual spectators, town skyline, floodlights, and advertising hoarding
 - **Backdrop** — shared inhabited stadium behind the menu-style scenes, with chibi figures strolling through the gaps
-- **Ball** — panelled football with 12 baked rotation phases; spin comes from ground covered rather than a clock, so it accelerates off a strike and settles on its own. Strikes squash the ball, throw an impact star, scuff turf and leave a trail while it flies
+- **Ball** — panelled football with 12 baked rotation phases; spin comes from ground covered rather than a clock, so it accelerates off a strike and settles on its own. Strikes squash the ball, throw an impact star, scuff turf and leave a trail while it flies. Passes track the receiver as he runs, and every other way the ball can move is eased or faded, so nothing teleports
 
 ### Scenes
 

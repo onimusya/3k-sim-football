@@ -196,7 +196,20 @@
     <div class="body">
       <ul class="log">
         <li>
-          <div class="v">v0.9 — The ball became a ball (current)</div>
+          <div class="v">v0.10 — Smooth ball motion (current)</div>
+          <ul>
+            <li>The ball looked right but did not <em>move</em> right. Rather than guess, a harness recorded its screen position every frame and flagged any frame moving far more than its neighbours — normalised per millisecond, so a long frame is not mistaken for a teleport, and attributed to whichever method last touched the ball</li>
+            <li>That found it immediately: <strong>every pass ended with a 53–77px teleport in a single frame</strong>. Passes aimed at where the receiver stood when the ball was struck, but receivers keep running — about 0.15 of the pitch during a pass — so the ball landed behind him, hung for one frame, then snapped onto his feet when possession changed</li>
+            <li>Passes now track the receiver's live position, blended in gradually so an early frame cannot yank the ball sideways, and they aim at the point the ball will actually sit rather than his centre</li>
+            <li>Shots were worse: the engine names the scorer, so he is staged near the box, and the ball was teleported along with him — usually from midfield, <strong>over 400px in one frame</strong>. It is played to him as a through ball now, which is smooth and better drama besides: goals arrive from a pass instead of materialising</li>
+            <li>Restarts moved the ball up to 861px instantly. They fade it out, move it, fade it in — a jump nobody can see is not a jump</li>
+            <li>Six more, each measured rather than assumed: handovers relying on a per-frame chase whose exponential approach front-loads its motion (68px first frame); that chase fighting the tweens because it was missing an <code>inFlight</code> check; a 40ms hole at kickoff where the chase dragged the ball off the centre spot (171px); interrupting an arcing ball dropping it 29px out of the sky; a scripted attack nudging the carrier after handing him the ball; and shots easing <em>in</em>, so the frames around the goal line were the quickest in the whole shot</li>
+            <li>Result over 20 seconds of play: from 14 jerks and an 861px single-frame move, to 0–2 jerks and nothing above ~50px. Most runs are now completely clean</li>
+            <li>Also caught by the harness, intermittently: players left permanently tilted, because <code>killTweensOf</code> does not run <code>onComplete</code>, so a celebration hop landing mid-kick skipped the reset that straightens them up</li>
+          </ul>
+        </li>
+        <li>
+          <div class="v">v0.9 — The ball became a ball</div>
           <ul>
             <li>The football was <code>add.circle(x, y, 6, 0xffffff)</code> — a white dot that read as a rendering artefact, and with no features on it a 30-yard pass looked like a dot sliding across the grass</li>
             <li><code>Ball.js</code> now generates a real panelled football by sampling a sphere: take each pixel's surface normal, un-rotate it, and darken it if it lands on one of the 12 pentagon centres of a truncated icosahedron. Twelve rotation phases bake into a frame strip, so spin is a frame lookup rather than per-frame drawing</li>

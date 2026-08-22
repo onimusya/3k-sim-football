@@ -328,6 +328,60 @@ export class MatchBall {
         this.wasAir = air;
     }
 
+    /** Forget where the ball was, so the next place() reads no motion. */
+    reset() {
+        this.lastX = null;
+        this.lastY = null;
+        this.wasAir = 0;
+    }
+
+    /**
+     * Reposition somewhere unrelated to where the ball was — a kickoff, a goal
+     * kick fetched from behind the net. `apply` performs the actual move.
+     *
+     * Two reasons this is not a bare assignment. Several hundred pixels crossed in
+     * one frame reads as a rendering fault rather than as the ball being placed,
+     * and because spin is derived from distance covered, the jump also dumps
+     * dozens of rotations into the roll and the ball flickers. Fading through the
+     * move fixes the first; reset() fixes the second.
+     *
+     * The marker is hidden rather than faded: it carries a looping alpha tween for
+     * its pulse, and a second alpha tween would fight it.
+     */
+    blink(apply) {
+        const s = this.sprite;
+        if (!s || !s.active) { apply(); this.reset(); return; }
+
+        const fade = [s, this.shadow];
+        this.scene.tweens.killTweensOf(fade);
+        this.marker.setVisible(false);
+        this.trail.forEach(t => t.setAlpha(0));
+
+        this.scene.tweens.add({
+            targets: fade,
+            alpha: 0,
+            duration: 110,
+            ease: 'Quad.easeIn',
+            onComplete: () => {
+                apply();
+                this.reset();
+                if (!s.active) return;
+                this.marker.setVisible(true);
+                this.scene.tweens.add({
+                    targets: fade,
+                    alpha: 1,
+                    duration: 130,
+                    ease: 'Quad.easeOut',
+                    onComplete: () => {
+                        // The shadow's alpha is driven per-frame by place(), but
+                        // the ball's is not, so make sure it lands back at full.
+                        if (s.active) s.setAlpha(1);
+                    },
+                });
+            },
+        });
+    }
+
     _ghost(x, y) {
         const t = this.trail[this.trailAt];
         this.trailAt = (this.trailAt + 1) % this.trail.length;

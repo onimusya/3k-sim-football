@@ -539,6 +539,9 @@ export class Chibi {
             yoyo: true,
             repeat: times - 1,
             ease: 'Quad.easeOut',
+            // yoyo returns to the recorded start value, but only if the tween is
+            // allowed to finish. A kick() landing mid-hop kills it.
+            onComplete: () => { if (this.sprite && this.sprite.active) this.sprite.y = 0; },
         });
         return this;
     }
@@ -588,6 +591,12 @@ export class Chibi {
             this.kicking = false;
             this.frame = 0;
             this._apply();
+            // Straighten up here rather than relying only on the tween's
+            // onComplete. killTweensOf does not run onComplete, so a hop() or a
+            // second kick() landing mid-lean skips it and the character is left
+            // permanently tilted. Only kick() ever touches angle, so forcing it
+            // back cannot interfere with anything else.
+            this.sprite.setAngle(0);
         });
         return this;
     }
